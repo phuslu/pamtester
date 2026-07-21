@@ -28,7 +28,14 @@ func main() {
 	line, _ := reader.ReadString('\n')
 	password := strings.TrimRight(line, "\r\n")
 
-	if err := pamtester.CheckUserPassword(u.Username, password); err != nil {
+	t, err := pamtester.Start(u.Username, nil)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "pam start failed:", err)
+		os.Exit(1)
+	}
+	defer t.Close()
+
+	if err := t.Authenticate(password); err != nil {
 		fmt.Fprintln(os.Stderr, "verification failed:", err)
 		os.Exit(1)
 	}

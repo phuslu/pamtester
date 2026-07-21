@@ -6,19 +6,31 @@ import (
 	"errors"
 )
 
-// PamService specifies the PAM service configuration file under /etc/pam.d/.
-// "passwd" exists on almost all distributions and carries the semantics of
-// "verify/change the current user's password". Unlike "login", it does not
-// impose extra restrictions such as securetty or allowed login time windows.
-// If the target system lacks this file, alternatives like "login" or "su" can
-// be used, or a minimal PAM service file can be created (typically just
-// `auth required pam_unix.so`).
-var PamService = "passwd"
+// Transaction represents one PAM transaction (pam_start .. pam_end).
+// PAM is only available on Linux; on other platforms Start always fails.
+type Transaction struct{}
 
-// CheckUserPassword verifies whether password is the login password for the
-// given user. Returns nil if the password is correct; returns a non-nil error
-// if the password is wrong, the user does not exist, or the PAM environment is
-// misconfigured.
-func CheckUserPassword(user, password string) error {
+// Start opens a PAM transaction for user. Unsupported on this platform.
+func Start(user string, opts *Options) (*Transaction, error) {
+	return nil, errors.ErrUnsupported
+}
+
+// Authenticate verifies password via pam_authenticate. Unsupported on this platform.
+func (t *Transaction) Authenticate(password string) error {
 	return errors.ErrUnsupported
+}
+
+// AcctMgmt checks account validity via pam_acct_mgmt. Unsupported on this platform.
+func (t *Transaction) AcctMgmt() error {
+	return errors.ErrUnsupported
+}
+
+// ChangeAuthTok changes the user's password via pam_chauthtok. Unsupported on this platform.
+func (t *Transaction) ChangeAuthTok(oldPassword, newPassword string) error {
+	return errors.ErrUnsupported
+}
+
+// Close ends the transaction. Unsupported on this platform.
+func (t *Transaction) Close() error {
+	return nil
 }
