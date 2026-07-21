@@ -30,16 +30,32 @@
 //	go get github.com/ebitengine/purego
 package pamtester
 
-import "fmt"
+import (
+	"fmt"
+	"runtime"
+)
 
 // PamService is the default PAM service configuration file under /etc/pam.d/,
-// used when Options.Service is empty. "passwd" exists on almost all
-// distributions and carries the semantics of "verify/change the current
-// user's password". Unlike "login", it does not impose extra restrictions
-// such as securetty or allowed login time windows. If the target system lacks
-// this file, alternatives like "login" or "su" can be used, or a minimal PAM
-// service file can be created (typically just `auth required pam_unix.so`).
-var PamService = "passwd"
+// used when Options.Service is empty.
+//
+// On Linux it is "passwd", which exists on almost all distributions and
+// carries the semantics of "verify/change the current user's password".
+// Unlike "login", it does not impose extra restrictions such as securetty or
+// allowed login time windows. If the target system lacks this file,
+// alternatives like "login" or "su" can be used, or a minimal PAM service
+// file can be created (typically just `auth required pam_unix.so`).
+//
+// On macOS it is "checkpw", the service Apple's own checkpw(3) API uses for
+// password verification. macOS's /etc/pam.d/passwd must NOT be used to verify
+// passwords: its auth stack is `auth required pam_permit.so`, which succeeds
+// unconditionally for any password. Note that "checkpw" carries no password
+// stack, so ChangeAuthTok on macOS requires Options{Service: "passwd"}.
+var PamService = func() string {
+	if runtime.GOOS == "darwin" {
+		return "checkpw"
+	}
+	return "passwd"
+}()
 
 // Options carries optional parameters for Start. The zero value is valid.
 type Options struct {
