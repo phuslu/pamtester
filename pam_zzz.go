@@ -6,6 +6,10 @@ import (
 	"errors"
 )
 
+// PamService is the default PAM service configuration file under /etc/pam.d/,
+// used when Options.Service is empty.
+var PamService = "passwd"
+
 // Transaction represents one PAM transaction (pam_start .. pam_end).
 // PAM is only available on Linux; on other platforms Start always fails.
 type Transaction struct{}

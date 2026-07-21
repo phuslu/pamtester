@@ -32,30 +32,7 @@ package pamtester
 
 import (
 	"fmt"
-	"runtime"
 )
-
-// PamService is the default PAM service configuration file under /etc/pam.d/,
-// used when Options.Service is empty.
-//
-// On Linux it is "passwd", which exists on almost all distributions and
-// carries the semantics of "verify/change the current user's password".
-// Unlike "login", it does not impose extra restrictions such as securetty or
-// allowed login time windows. If the target system lacks this file,
-// alternatives like "login" or "su" can be used, or a minimal PAM service
-// file can be created (typically just `auth required pam_unix.so`).
-//
-// On macOS it is "checkpw", the service Apple's own checkpw(3) API uses for
-// password verification. macOS's /etc/pam.d/passwd must NOT be used to verify
-// passwords: its auth stack is `auth required pam_permit.so`, which succeeds
-// unconditionally for any password. Note that "checkpw" carries no password
-// stack, so ChangeAuthTok on macOS requires Options{Service: "passwd"}.
-var PamService = func() string {
-	if runtime.GOOS == "darwin" {
-		return "checkpw"
-	}
-	return "passwd"
-}()
 
 // Options carries optional parameters for Start. The zero value is valid.
 type Options struct {
@@ -118,45 +95,68 @@ const (
 	ErrIncomplete          Error = 31 // PAM_INCOMPLETE
 )
 
-// errMessages mirrors Linux-PAM's pam_strerror() texts, so Error() is
-// meaningful on any platform without calling into libpam.
-var errMessages = map[Error]string{
-	ErrOpen:                "Failed to load module",
-	ErrSymbol:              "Symbol not found",
-	ErrService:             "Error in service module",
-	ErrSystem:              "System error",
-	ErrBuf:                 "Memory buffer error",
-	ErrPermDenied:          "Permission denied",
-	ErrAuth:                "Authentication failure",
-	ErrCredInsufficient:    "Insufficient credentials to access authentication data",
-	ErrAuthinfoUnavail:     "Authentication service cannot retrieve authentication info",
-	ErrUserUnknown:         "User not known to the underlying authentication module",
-	ErrMaxTries:            "Have exhausted maximum number of retries for service",
-	ErrNewAuthTokReqd:      "Authentication token is no longer valid; new one required",
-	ErrAcctExpired:         "User account has expired",
-	ErrSession:             "Cannot make/remove an entry for the specified session",
-	ErrCredUnavail:         "Authentication service cannot retrieve user credentials",
-	ErrCredExpired:         "User credentials expired",
-	ErrCred:                "Failure setting user credentials",
-	ErrNoModuleData:        "No module specific data is present",
-	ErrConv:                "Conversation error",
-	ErrAuthTok:             "Authentication token manipulation error",
-	ErrAuthTokRecovery:     "Authentication information cannot be recovered",
-	ErrAuthTokLockBusy:     "Authentication token lock busy",
-	ErrAuthTokDisableAging: "Authentication token aging disabled",
-	ErrTryAgain:            "Failed preliminary check by password service",
-	ErrIgnore:              "The return value should be ignored by PAM dispatch",
-	ErrAbort:               "Critical error - immediate abort",
-	ErrAuthTokExpired:      "Authentication token expired",
-	ErrModuleUnknown:       "Module is unknown",
-	ErrBadItem:             "Bad item passed to pam_*_item()",
-	ErrConvAgain:           "Conversation is waiting for event",
-	ErrIncomplete:          "Application needs to call libpam again",
-}
-
 func (e Error) Error() string {
-	if s, ok := errMessages[e]; ok {
-		return s
+	switch e {
+	case ErrOpen:
+		return "Failed to load module"
+	case ErrSymbol:
+		return "Symbol not found"
+	case ErrService:
+		return "Error in service module"
+	case ErrSystem:
+		return "System error"
+	case ErrBuf:
+		return "Memory buffer error"
+	case ErrPermDenied:
+		return "Permission denied"
+	case ErrAuth:
+		return "Authentication failure"
+	case ErrCredInsufficient:
+		return "Insufficient credentials to access authentication data"
+	case ErrAuthinfoUnavail:
+		return "Authentication service cannot retrieve authentication info"
+	case ErrUserUnknown:
+		return "User not known to the underlying authentication module"
+	case ErrMaxTries:
+		return "Have exhausted maximum number of retries for service"
+	case ErrNewAuthTokReqd:
+		return "Authentication token is no longer valid; new one required"
+	case ErrAcctExpired:
+		return "User account has expired"
+	case ErrSession:
+		return "Cannot make/remove an entry for the specified session"
+	case ErrCredUnavail:
+		return "Authentication service cannot retrieve user credentials"
+	case ErrCredExpired:
+		return "User credentials expired"
+	case ErrCred:
+		return "Failure setting user credentials"
+	case ErrNoModuleData:
+		return "No module specific data is present"
+	case ErrConv:
+		return "Conversation error"
+	case ErrAuthTok:
+		return "Authentication token manipulation error"
+	case ErrAuthTokRecovery:
+		return "Authentication information cannot be recovered"
+	case ErrAuthTokLockBusy:
+		return "Authentication token lock busy"
+	case ErrAuthTokDisableAging:
+		return "Authentication token aging disabled"
+	case ErrTryAgain:
+		return "Failed preliminary check by password service"
+	case ErrIgnore:
+		return "The return value should be ignored by PAM dispatch"
+	case ErrAbort:
+		return "Critical error - immediate abort"
+	case ErrAuthTokExpired:
+		return "Authentication token expired"
+	case ErrModuleUnknown:
+		return "Module is unknown"
+	case ErrBadItem:
+		return "Bad item passed to pam_*_item()"
+	case ErrConvAgain:
+		return "Conversation is waiting for event"
 	}
 	return fmt.Sprintf("PAM error %d", int32(e))
 }

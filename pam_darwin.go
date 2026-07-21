@@ -12,6 +12,10 @@ import (
 	"github.com/ebitengine/purego"
 )
 
+// PamService is the default PAM service configuration file under /etc/pam.d/,
+// used when Options.Service is empty.
+var PamService = "checkpw"
+
 // ---------- PAM constants (from <security/pam_constants.h>) ----------
 //
 // macOS ships OpenPAM, whose return codes are numbered differently from
