@@ -9,8 +9,7 @@ import (
 	"sync"
 	"syscall"
 	"unicode/utf16"
-
-	"github.com/ebitengine/purego"
+	"unsafe"
 )
 
 // PamService is the default PAM service configuration file under /etc/pam.d/,
@@ -30,42 +29,37 @@ var (
 	initOnce sync.Once
 	initErr  error
 
-	logonUserW            func(username, domain, password *uint16, logonType, logonProvider uint32, token *uintptr) int32
-	netUserChangePassword func(domainname, username, oldpassword, newpassword *uint16) uint32
-	getUserNameW          func(buffer *uint16, size *uint32) int32
-	closeHandle           func(handle uintptr) int32
-	getLastError          func() uint32
+	advapi32 = syscall.NewLazyDLL("advapi32.dll")
+	netapi32 = syscall.NewLazyDLL("netapi32.dll")
+	kernel32 = syscall.NewLazyDLL("kernel32.dll")
+
+	logonUserW            = advapi32.NewProc("LogonUserW")
+	netUserChangePassword = netapi32.NewProc("NetUserChangePassword")
+	getUserNameW          = advapi32.NewProc("GetUserNameW")
+	closeHandle           = kernel32.NewProc("CloseHandle")
 )
 
-func loadDLL(name string) (uintptr, error) {
-	h, err := syscall.LoadLibrary(name)
-	return uintptr(h), err
-}
-
-func mustLoadDLL(name string) uintptr {
-	h, err := loadDLL(name)
-	if err != nil {
-		panic(fmt.Errorf("failed to load %s: %w", name, err))
-	}
-	return h
-}
-
 func initLibs() {
-	defer func() {
-		if r := recover(); r != nil {
-			initErr = fmt.Errorf("PAM initialization failed: %v", r)
+	for _, proc := range []*syscall.LazyProc{
+		logonUserW,
+		getUserNameW,
+		netUserChangePassword,
+		closeHandle,
+	} {
+		if err := proc.Find(); err != nil {
+			initErr = fmt.Errorf("failed to initialize %s: %w", proc.Name, err)
+			return
 		}
-	}()
+	}
+}
 
-	advapi32 := mustLoadDLL("advapi32.dll")
-	netapi32 := mustLoadDLL("netapi32.dll")
-	kernel32 := mustLoadDLL("kernel32.dll")
-
-	purego.RegisterLibFunc(&logonUserW, advapi32, "LogonUserW")
-	purego.RegisterLibFunc(&getUserNameW, advapi32, "GetUserNameW")
-	purego.RegisterLibFunc(&netUserChangePassword, netapi32, "NetUserChangePassword")
-	purego.RegisterLibFunc(&closeHandle, kernel32, "CloseHandle")
-	purego.RegisterLibFunc(&getLastError, kernel32, "GetLastError")
+// lastErrCode extracts the last-error value returned by syscall.Proc.Call.
+// Its error is always a syscall.Errno, even when the Win32 call succeeds.
+func lastErrCode(err error) uint32 {
+	if errno, ok := err.(syscall.Errno); ok {
+		return uint32(errno)
+	}
+	return 0
 }
 
 // ---------- UTF-16 helpers ----------
@@ -140,13 +134,19 @@ func Start(user string, opts *Options) (*Transaction, error) {
 		var size uint32 = 256
 		buf := make([]uint16, size)
 		for {
-			ret := getUserNameW(&buf[0], &size)
+			ret, _, callErr := getUserNameW.Call(
+				uintptr(unsafe.Pointer(&buf[0])),
+				uintptr(unsafe.Pointer(&size)),
+			)
 			if ret != 0 {
 				user = utf16ToGoString(buf)
 				break
 			}
 			// Buffer too small; size now holds the required length.
-			if size > 1024 {
+			if lastErrCode(callErr) != uint32(syscall.ERROR_INSUFFICIENT_BUFFER) {
+				return nil, fmt.Errorf("GetUserNameW: %w", callErr)
+			}
+			if size == 0 || size > 1024 {
 				return nil, errors.New("GetUserNameW: buffer too large")
 			}
 			buf = make([]uint16, size)
@@ -181,7 +181,7 @@ func (t *Transaction) Authenticate(password string) error {
 
 	// Close any token from a previous Authenticate call.
 	if t.token != 0 {
-		closeHandle(t.token)
+		closeHandle.Call(t.token)
 		t.token = 0
 	}
 
@@ -194,17 +194,16 @@ func (t *Transaction) Authenticate(password string) error {
 	}
 
 	var token uintptr
-	ret := logonUserW(
-		&userW[0],
-		domainW,
-		&passwordW[0],
-		logon32LogonNetwork,
-		logon32ProviderDefault,
-		&token,
+	ret, _, callErr := logonUserW.Call(
+		uintptr(unsafe.Pointer(&userW[0])),
+		uintptr(unsafe.Pointer(domainW)),
+		uintptr(unsafe.Pointer(&passwordW[0])),
+		uintptr(logon32LogonNetwork),
+		uintptr(logon32ProviderDefault),
+		uintptr(unsafe.Pointer(&token)),
 	)
 	if ret == 0 {
-		code := getLastError()
-		return fmt.Errorf("pam_authenticate: %w", mapWinError(code))
+		return fmt.Errorf("pam_authenticate: %w", mapWinError(lastErrCode(callErr)))
 	}
 	t.token = token
 	return nil
@@ -246,9 +245,14 @@ func (t *Transaction) ChangeAuthTok(oldPassword, newPassword string) error {
 		domainW = &d[0]
 	}
 
-	ret := netUserChangePassword(domainW, &userW[0], &oldW[0], &newW[0])
+	ret, _, _ := netUserChangePassword.Call(
+		uintptr(unsafe.Pointer(domainW)),
+		uintptr(unsafe.Pointer(&userW[0])),
+		uintptr(unsafe.Pointer(&oldW[0])),
+		uintptr(unsafe.Pointer(&newW[0])),
+	)
 	if ret != 0 {
-		return fmt.Errorf("pam_chauthtok: %w", mapWinError(ret))
+		return fmt.Errorf("pam_chauthtok: %w", mapWinError(uint32(ret)))
 	}
 	return nil
 }
@@ -264,7 +268,7 @@ func (t *Transaction) Close() error {
 	t.closed = true
 
 	if t.token != 0 {
-		closeHandle(t.token)
+		closeHandle.Call(t.token)
 		t.token = 0
 	}
 	return nil
