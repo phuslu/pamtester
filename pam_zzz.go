@@ -1,4 +1,4 @@
-//go:build !linux && !darwin && !windows
+//go:build nopamtester || (!linux && !darwin && !windows)
 
 package pamtester
 
@@ -10,31 +10,37 @@ import (
 // used when Options.Service is empty.
 var PamService = "passwd"
 
-// Transaction represents one PAM transaction (pam_start .. pam_end).
-// PAM is only available on Linux; on other platforms Start always fails.
+// Transaction represents one PAM transaction (pam_start .. pam_end). PAM is
+// only available on Linux; on unsupported platforms, or when built with the
+// nopamtester tag, every operation falls back to this stub and Start always
+// fails.
 type Transaction struct{}
 
-// Start opens a PAM transaction for user. Unsupported on this platform.
+// Start opens a PAM transaction for user. Unsupported: with the nopamtester
+// tag set, or on this platform, no real PAM backend is compiled in.
 func Start(user string, opts *Options) (*Transaction, error) {
 	return nil, errors.ErrUnsupported
 }
 
-// Authenticate verifies password via pam_authenticate. Unsupported on this platform.
+// Authenticate verifies password via pam_authenticate. Unsupported with the
+// nopamtester tag or on this platform.
 func (t *Transaction) Authenticate(password string) error {
 	return errors.ErrUnsupported
 }
 
-// AcctMgmt checks account validity via pam_acct_mgmt. Unsupported on this platform.
+// AcctMgmt checks account validity via pam_acct_mgmt. Unsupported with the
+// nopamtester tag or on this platform.
 func (t *Transaction) AcctMgmt() error {
 	return errors.ErrUnsupported
 }
 
-// ChangeAuthTok changes the user's password via pam_chauthtok. Unsupported on this platform.
+// ChangeAuthTok changes the user's password via pam_chauthtok. Unsupported
+// with the nopamtester tag or on this platform.
 func (t *Transaction) ChangeAuthTok(oldPassword, newPassword string) error {
 	return errors.ErrUnsupported
 }
 
-// Close ends the transaction. Unsupported on this platform.
+// Close ends the transaction. Nothing to do in the fallback implementation.
 func (t *Transaction) Close() error {
 	return nil
 }
