@@ -5,6 +5,7 @@ package pamtester
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"syscall"
@@ -35,14 +36,12 @@ var (
 
 	logonUserW            = advapi32.NewProc("LogonUserW")
 	netUserChangePassword = netapi32.NewProc("NetUserChangePassword")
-	getUserNameW          = advapi32.NewProc("GetUserNameW")
 	closeHandle           = kernel32.NewProc("CloseHandle")
 )
 
 func initLibs() {
 	for _, proc := range []*syscall.LazyProc{
 		logonUserW,
-		getUserNameW,
 		netUserChangePassword,
 		closeHandle,
 	} {
@@ -66,16 +65,6 @@ func lastErrCode(err error) uint32 {
 
 func utf16FromString(s string) []uint16 {
 	return utf16.Encode(append([]rune(s), 0))
-}
-
-func utf16ToGoString(s []uint16) string {
-	for i, v := range s {
-		if v == 0 {
-			s = s[:i]
-			break
-		}
-	}
-	return string(utf16.Decode(s))
 }
 
 // ---------- Error mapping ----------
@@ -143,15 +132,21 @@ func winError(code uint32) error {
 // Obtain one with Start, and always Close it.
 type Transaction struct {
 	mu     sync.Mutex
-	user   string  // account name (without domain prefix)
-	domain string  // parsed from user (domain\user format); empty = local
-	token  uintptr // token from LogonUserW, valid after successful Authenticate
+	user   string // account name (without domain prefix)
+	domain string // parsed from user (domain\user format); empty = unqualified
 	closed bool
 }
 
-// Start opens a new transaction for user. If user is empty the current
-// process user is used (via GetUserNameW). On Windows opts.RHost, opts.TTY
-// and opts.RUser are ignored — there are no PAM items to set.
+// Start opens a new transaction for user, given as "user", "DOMAIN\user",
+// ".\user" (local account) or "user@domain.tld". If user is empty the
+// current process user is used, in its fully qualified DOMAIN\user form. On
+// Windows opts.RHost, opts.TTY and opts.RUser are ignored — there are no PAM
+// items to set.
+//
+// An unqualified name is resolved by Windows: LogonUserW searches the local
+// account database and then trusted domains, while NetUserChangePassword
+// targets the caller's logon domain. On a domain-joined machine, qualify
+// local accounts as ".\user" so ChangeAuthTok changes the local account.
 func Start(user string, opts *Options) (*Transaction, error) {
 	initOnce.Do(initLibs)
 	if initErr != nil {
@@ -159,26 +154,11 @@ func Start(user string, opts *Options) (*Transaction, error) {
 	}
 
 	if user == "" {
-		var size uint32 = 256
-		buf := make([]uint16, size)
-		for {
-			ret, _, callErr := getUserNameW.Call(
-				uintptr(unsafe.Pointer(&buf[0])),
-				uintptr(unsafe.Pointer(&size)),
-			)
-			if ret != 0 {
-				user = utf16ToGoString(buf)
-				break
-			}
-			// Buffer too small; size now holds the required length.
-			if lastErrCode(callErr) != uint32(syscall.ERROR_INSUFFICIENT_BUFFER) {
-				return nil, fmt.Errorf("GetUserNameW: %w", callErr)
-			}
-			if size == 0 || size > 1024 {
-				return nil, errors.New("GetUserNameW: buffer too large")
-			}
-			buf = make([]uint16, size)
+		u, err := currentUser()
+		if err != nil {
+			return nil, err
 		}
+		user = u
 	}
 
 	if err := checkNUL(user); err != nil {
@@ -214,12 +194,6 @@ func (t *Transaction) Authenticate(password string) error {
 		return errors.New("pamtester: transaction already closed")
 	}
 
-	// Close any token from a previous Authenticate call.
-	if t.token != 0 {
-		closeHandle.Call(t.token)
-		t.token = 0
-	}
-
 	userW := utf16FromString(t.user)
 	passwordW := utf16FromString(password)
 	var domainW *uint16
@@ -240,7 +214,8 @@ func (t *Transaction) Authenticate(password string) error {
 	if ret == 0 {
 		return fmt.Errorf("pam_authenticate: %w", winError(lastErrCode(callErr)))
 	}
-	t.token = token
+	// Only the credential check matters; the logon token itself is unused.
+	closeHandle.Call(token)
 	return nil
 }
 
@@ -278,8 +253,17 @@ func (t *Transaction) ChangeAuthTok(oldPassword, newPassword string) error {
 	oldW := utf16FromString(oldPassword)
 	newW := utf16FromString(newPassword)
 	var domainW *uint16
-	if t.domain != "" {
-		d := utf16FromString(t.domain)
+	if domain := t.domain; domain != "" {
+		// "." means the local machine for LogonUserW, but
+		// NetUserChangePassword needs an actual server name.
+		if domain == "." {
+			h, err := os.Hostname()
+			if err != nil {
+				return fmt.Errorf("pam_chauthtok: %w", err)
+			}
+			domain = h
+		}
+		d := utf16FromString(domain)
 		domainW = &d[0]
 	}
 
@@ -301,8 +285,7 @@ func (t *Transaction) Messages() []string {
 	return nil
 }
 
-// Close releases resources (the token handle from LogonUserW if any).
-// Calling Close more than once is harmless.
+// Close ends the transaction. Calling Close more than once is harmless.
 func (t *Transaction) Close() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -310,10 +293,5 @@ func (t *Transaction) Close() error {
 		return nil
 	}
 	t.closed = true
-
-	if t.token != 0 {
-		closeHandle.Call(t.token)
-		t.token = 0
-	}
 	return nil
 }

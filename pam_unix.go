@@ -253,12 +253,21 @@ type Transaction struct {
 	closed     bool
 }
 
-// Start opens a PAM transaction for user. opts may be nil.
-// The caller must Close the returned Transaction.
+// Start opens a PAM transaction for user. If user is empty the current
+// process user is used. opts may be nil. The caller must Close the returned
+// Transaction.
 func Start(user string, opts *Options) (*Transaction, error) {
 	initOnce.Do(initLibs)
 	if initErr != nil {
 		return nil, initErr
+	}
+
+	if user == "" {
+		u, err := currentUser()
+		if err != nil {
+			return nil, err
+		}
+		user = u
 	}
 
 	service := PamService

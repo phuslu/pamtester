@@ -33,6 +33,7 @@ package pamtester
 import (
 	"errors"
 	"fmt"
+	"os/user"
 	"strings"
 )
 
@@ -69,6 +70,17 @@ type Options struct {
 
 	// RUser, if non-empty, is set as PAM_RUSER — the requesting user.
 	RUser string
+}
+
+// currentUser returns the name of the user running this process; Start uses
+// it when called with an empty user name. On Windows the name is the fully
+// qualified DOMAIN\user form.
+func currentUser() (string, error) {
+	u, err := user.Current()
+	if err != nil {
+		return "", fmt.Errorf("pamtester: cannot determine current user: %w", err)
+	}
+	return u.Username, nil
 }
 
 // Error is a PAM return code (from <security/_pam_types.h>) as a Go error.
