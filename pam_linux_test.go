@@ -94,6 +94,9 @@ func runWrapped(m *testing.M, lib string) int {
 			"auth required %[1]s passdb=%[2]s verbose\naccount required %[1]s passdb=%[2]s verbose\npassword required %[1]s passdb=%[2]s verbose\n",
 			matrix, passdb),
 		"services/chatty": fmt.Sprintf("auth required %s num_lines=2 info error\n", chatty),
+		"services/echo": fmt.Sprintf(
+			"auth required %[1]s passdb=%[2]s echo\npassword required %[1]s passdb=%[2]s echo\n",
+			matrix, passdb),
 	}
 	for name, content := range files {
 		p := filepath.Join(dir, name)
@@ -313,5 +316,109 @@ func TestWrapperConcurrent(t *testing.T) {
 	close(errs)
 	for err := range errs {
 		t.Error(err)
+	}
+}
+
+// recordConv answers prompts with the given replies in order and records
+// every message it sees.
+type recordConv struct {
+	replies []string
+	seen    []Style
+	texts   []string
+}
+
+func (c *recordConv) conv(style Style, msg string) (string, error) {
+	c.seen = append(c.seen, style)
+	c.texts = append(c.texts, msg)
+	if style != PromptEchoOff && style != PromptEchoOn {
+		return "", nil
+	}
+	if len(c.replies) == 0 {
+		return "", errors.New("unexpected prompt " + msg)
+	}
+	r := c.replies[0]
+	c.replies = c.replies[1:]
+	return r, nil
+}
+
+func TestWrapperAuthenticateConv(t *testing.T) {
+	tx := startMatrix(t, "matrix")
+	c := &recordConv{replies: []string{testPassword}}
+	if err := tx.AuthenticateConv(c.conv); err != nil {
+		t.Fatalf("AuthenticateConv = %v", err)
+	}
+	if len(c.seen) != 1 || c.seen[0] != PromptEchoOff {
+		t.Errorf("conv saw %v %q, want one PromptEchoOff", c.seen, c.texts)
+	}
+
+	tx = startMatrix(t, "echo")
+	c = &recordConv{replies: []string{testPassword}}
+	if err := tx.AuthenticateConv(c.conv); err != nil {
+		t.Fatalf("AuthenticateConv(echo) = %v", err)
+	}
+	if len(c.seen) != 1 || c.seen[0] != PromptEchoOn {
+		t.Errorf("conv saw %v %q, want one PromptEchoOn", c.seen, c.texts)
+	}
+}
+
+func TestWrapperAuthenticateConvError(t *testing.T) {
+	tx := startMatrix(t, "matrix")
+	errCancel := errors.New("user cancelled")
+	err := tx.AuthenticateConv(func(Style, string) (string, error) { return "", errCancel })
+	if !errors.Is(err, errCancel) {
+		t.Fatalf("AuthenticateConv = %v, want it to wrap the ConvFunc error", err)
+	}
+	if err := tx.AuthenticateConv(func(Style, string) (string, error) { return "a\x00b", nil }); !errors.Is(err, errNUL) {
+		t.Fatalf("AuthenticateConv(reply with NUL) = %v, want errNUL", err)
+	}
+	if err := tx.AuthenticateConv(nil); err == nil {
+		t.Fatal("AuthenticateConv(nil) succeeded")
+	}
+}
+
+func TestWrapperAuthenticateConvMessages(t *testing.T) {
+	tx := startMatrix(t, "chatty")
+	c := &recordConv{}
+	if err := tx.AuthenticateConv(c.conv); err != nil {
+		t.Fatalf("AuthenticateConv = %v", err)
+	}
+	var info, errs int
+	for _, s := range c.seen {
+		switch s {
+		case TextInfo:
+			info++
+		case ErrorMsg:
+			errs++
+		}
+	}
+	if info == 0 || errs == 0 {
+		t.Errorf("conv saw %v, want both TextInfo and ErrorMsg", c.seen)
+	}
+	if len(tx.Messages()) != len(c.seen) {
+		t.Errorf("Messages() = %d entries, conv saw %d", len(tx.Messages()), len(c.seen))
+	}
+}
+
+func TestWrapperChangeAuthTokConv(t *testing.T) {
+	const newPassword = "c0nv-Secret!"
+
+	tx := startMatrix(t, "matrix")
+	err := tx.ChangeAuthTokConv(func(_ Style, prompt string) (string, error) {
+		if strings.Contains(strings.ToLower(prompt), "new") {
+			return newPassword, nil
+		}
+		return testPassword, nil
+	})
+	if err != nil {
+		t.Fatalf("ChangeAuthTokConv = %v", err)
+	}
+	t.Cleanup(func() {
+		tx := startMatrix(t, "matrix")
+		if err := tx.ChangeAuthTok(newPassword, testPassword); err != nil {
+			t.Errorf("restoring password: %v", err)
+		}
+	})
+	if err := startMatrix(t, "matrix").Authenticate(newPassword); err != nil {
+		t.Errorf("Authenticate(new) after ChangeAuthTokConv = %v", err)
 	}
 }

@@ -27,12 +27,6 @@ import (
 const (
 	pamSuccess = 0 // PAM_SUCCESS
 
-	// conversation message styles
-	pamPromptEchoOff = 1 // prompt for input without echo — typical "Password:" prompt
-	pamPromptEchoOn  = 2 // prompt for input with echo
-	pamErrorMsg      = 3 // error message, no response expected
-	pamTextInfo      = 4 // informational message, no response expected
-
 	// pam_set_item item types
 	pamItemTTY     = 3 // PAM_TTY
 	pamItemRHost   = 4 // PAM_RHOST
@@ -164,10 +158,6 @@ func goString(p uintptr) string {
 	return string(unsafe.Slice((*byte)(cptr(p)), n))
 }
 
-// respondFunc answers a single PAM prompt (style is pamPromptEchoOff/On).
-// Returning ok=false aborts the conversation with PAM_CONV_ERR.
-type respondFunc func(style int32, prompt string) (reply string, ok bool)
-
 // convHandler is the PAM conversation function shared by all transactions;
 // appdata is the registry id of the owning Transaction.
 //
@@ -212,31 +202,38 @@ func convHandler(numMsg int32, msgs uintptr, respOut uintptr, appdata uintptr) i
 		return code
 	}
 
+	// t.respond, t.msgs and t.convErr are only touched here and in do, while
+	// t.mu is held for the duration of the pam_* call — no extra locking.
 	for i := 0; i < n; i++ {
 		m := (*pamMessage)(cptr(msgPtrs[i]))
-		switch m.msgStyle {
-		case pamPromptEchoOff, pamPromptEchoOn:
-			if respOut == 0 {
+		style, text := Style(m.msgStyle), goString(m.msg)
+		switch style {
+		case PromptEchoOff, PromptEchoOn:
+			if respOut == 0 || t.respond == nil {
 				return release(nativeConvErr)
 			}
-			// t.respond is only read here, on the same thread that holds
-			// t.mu inside the pam_* call — no extra locking needed.
-			if t.respond == nil {
-				return release(nativeConvErr)
+			reply, err := t.respond(style, text)
+			if err == nil {
+				err = checkNUL(reply)
 			}
-			reply, ok := t.respond(m.msgStyle, goString(m.msg))
-			if !ok {
+			if err != nil {
+				t.convErr = err
 				return release(nativeConvErr)
 			}
 			if responses[i].resp = cStrdup(reply); responses[i].resp == 0 {
 				return release(nativeBufErr)
 			}
-		case pamErrorMsg, pamTextInfo:
+		case ErrorMsg, TextInfo:
 			// No response expected; resp stays NULL. Keep the text (e.g.
 			// "BAD PASSWORD: ..." or "Password will expire in 3 days")
-			// so callers can see why an operation failed. Like t.respond,
-			// t.msgs is only touched while t.mu is held by do.
-			t.msgs = append(t.msgs, goString(m.msg))
+			// so callers can see why an operation failed.
+			t.msgs = append(t.msgs, text)
+			if t.respond != nil {
+				if _, err := t.respond(style, text); err != nil {
+					t.convErr = err
+					return release(nativeConvErr)
+				}
+			}
 		}
 	}
 
@@ -259,7 +256,8 @@ type Transaction struct {
 	pamh       uintptr
 	convMem    uintptr // C-heap allocated struct pam_conv
 	id         uintptr // key in convTxns
-	respond    respondFunc
+	respond    ConvFunc
+	convErr    error    // error returned by respond during the last operation
 	msgs       []string // PAM_ERROR_MSG / PAM_TEXT_INFO texts of the last operation
 	lastStatus int32
 	flags      int32 // flags for pam_authenticate / pam_acct_mgmt
@@ -355,7 +353,7 @@ func Start(user string, opts *Options) (*Transaction, error) {
 
 // do runs one pam_* primitive with the given conversation responder
 // installed, and maps a non-success return code to a wrapped Error.
-func (t *Transaction) do(name string, respond respondFunc, fn func() int32) error {
+func (t *Transaction) do(name string, respond ConvFunc, fn func() int32) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
@@ -363,15 +361,19 @@ func (t *Transaction) do(name string, respond respondFunc, fn func() int32) erro
 	}
 	t.respond = respond
 	defer func() { t.respond = nil }()
-	t.msgs = nil
+	t.msgs, t.convErr = nil, nil
 
 	ret := fn()
 	t.lastStatus = ret
 	if ret != pamSuccess {
+		err := fmt.Errorf("%s: %w", name, pamError(ret))
 		if len(t.msgs) > 0 {
-			return fmt.Errorf("%s: %w (%s)", name, pamError(ret), strings.Join(t.msgs, "; "))
+			err = fmt.Errorf("%w (%s)", err, strings.Join(t.msgs, "; "))
 		}
-		return fmt.Errorf("%s: %w", name, pamError(ret))
+		if t.convErr != nil {
+			err = fmt.Errorf("%w: %w", err, t.convErr)
+		}
+		return err
 	}
 	return nil
 }
@@ -412,7 +414,7 @@ func (t *Transaction) Authenticate(password string) error {
 		return errNullAuthTok
 	}
 	return t.do("pam_authenticate",
-		func(style int32, prompt string) (string, bool) { return password, true },
+		func(Style, string) (string, error) { return password, nil },
 		func() int32 {
 			if presetAuthTok {
 				if ret := pamSetItem(t.pamh, pamItemAuthTok, password); ret != pamSuccess {
@@ -421,6 +423,23 @@ func (t *Transaction) Authenticate(password string) error {
 			}
 			return pamAuthenticate(t.pamh, t.flags)
 		})
+}
+
+// AuthenticateConv runs pam_authenticate with conv answering every
+// conversation message, for stacks that ask more than a single password —
+// e.g. a password followed by an OTP, or a username prompt. Error and info
+// messages are passed to conv as well, and are also kept for Messages.
+//
+// Unlike Authenticate, nothing is pre-set as PAM_AUTHTOK, so on macOS use a
+// service whose modules prompt (not the default "checkpw", whose
+// pam_opendirectory runs with use_first_pass). PAM_DISALLOW_NULL_AUTHTOK is
+// still passed unless Options.AllowNullAuthTok is set.
+func (t *Transaction) AuthenticateConv(conv ConvFunc) error {
+	if conv == nil {
+		return errors.New("pamtester: nil ConvFunc")
+	}
+	return t.do("pam_authenticate", conv,
+		func() int32 { return pamAuthenticate(t.pamh, t.flags) })
 }
 
 // AcctMgmt runs pam_acct_mgmt: it checks that the account is valid — not
@@ -462,12 +481,23 @@ func (t *Transaction) ChangeAuthTok(oldPassword, newPassword string) error {
 		return err
 	}
 	return t.do("pam_chauthtok",
-		func(style int32, prompt string) (string, bool) {
+		func(_ Style, prompt string) (string, error) {
 			if strings.Contains(strings.ToLower(prompt), "new") {
-				return newPassword, true
+				return newPassword, nil
 			}
-			return oldPassword, true
+			return oldPassword, nil
 		},
+		func() int32 { return pamChauthtok(t.pamh, 0) })
+}
+
+// ChangeAuthTokConv runs pam_chauthtok with conv answering every
+// conversation message, for callers that want to drive the password change
+// interactively or handle prompts ChangeAuthTok does not recognise.
+func (t *Transaction) ChangeAuthTokConv(conv ConvFunc) error {
+	if conv == nil {
+		return errors.New("pamtester: nil ConvFunc")
+	}
+	return t.do("pam_chauthtok", conv,
 		func() int32 { return pamChauthtok(t.pamh, 0) })
 }
 

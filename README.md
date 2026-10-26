@@ -77,6 +77,35 @@ platforms (OpenPAM and Win32 codes are translated), so use `errors.Is`:
 | `ErrPermDenied` | access denied (e.g. pam_access, logon restrictions) |
 | `ErrAuthTok`, `ErrAuthTokRecovery` | password change rejected / wrong old password |
 
+## Custom conversation
+
+For stacks that ask more than one password (OTP, 2FA, a username prompt), or
+to drive a password change interactively, pass a `ConvFunc`. It receives
+every message: prompts (`PromptEchoOff`, `PromptEchoOn`) are answered with the
+returned string, `ErrorMsg`/`TextInfo` are informational.
+
+```go
+err := t.AuthenticateConv(func(style pamtester.Style, msg string) (string, error) {
+    switch style {
+    case pamtester.PromptEchoOff:
+        if strings.Contains(strings.ToLower(msg), "verification code") {
+            return readOTP()
+        }
+        return password, nil
+    case pamtester.PromptEchoOn:
+        return readLine(msg)
+    default:
+        fmt.Println(msg) // ErrorMsg / TextInfo
+        return "", nil
+    }
+})
+```
+
+Returning an error aborts the PAM call; the returned error wraps it, so
+`errors.Is(err, yourErr)` works. `ChangeAuthTokConv` does the same for
+`pam_chauthtok`. On Windows, which has no PAM conversation, these ask for the
+password(s) with fixed prompts and then call `Authenticate`/`ChangeAuthTok`.
+
 ## Empty passwords
 
 `Authenticate("")` fails with `ErrAuth` by default, and

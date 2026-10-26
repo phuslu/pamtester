@@ -94,6 +94,27 @@ func currentUser() (string, error) {
 	return u.Username, nil
 }
 
+// Style is the kind of a PAM conversation message passed to a ConvFunc.
+type Style int
+
+// Conversation message styles (same values in Linux-PAM and OpenPAM).
+const (
+	PromptEchoOff Style = 1 // ask for secret input, e.g. "Password: "
+	PromptEchoOn  Style = 2 // ask for visible input, e.g. a username or OTP
+	ErrorMsg      Style = 3 // error message; the reply is ignored
+	TextInfo      Style = 4 // informational message; the reply is ignored
+)
+
+// ConvFunc answers one PAM conversation message. For PromptEchoOff and
+// PromptEchoOn the returned string is sent to the module; for ErrorMsg and
+// TextInfo it is ignored. Returning an error aborts the PAM call: it then
+// fails with ErrConv (or the module's own code), and the returned error also
+// wraps the ConvFunc's error, so errors.Is works with either.
+//
+// A ConvFunc is called synchronously from within the PAM call on the
+// caller's goroutine, so it may block, e.g. to ask an interactive user.
+type ConvFunc func(style Style, msg string) (string, error)
+
 // errNullAuthTok is returned by Authenticate for an empty password unless
 // Options.AllowNullAuthTok is set.
 var errNullAuthTok = fmt.Errorf("pam_authenticate: %w (empty password)", ErrAuth)

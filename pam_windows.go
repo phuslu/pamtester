@@ -228,6 +228,21 @@ func (t *Transaction) Authenticate(password string) error {
 	return nil
 }
 
+// AuthenticateConv asks conv for the password with a single PromptEchoOff
+// "Password: " prompt — Windows has no PAM conversation — and then behaves
+// like Authenticate. An error from conv is returned wrapped together with
+// ErrConv.
+func (t *Transaction) AuthenticateConv(conv ConvFunc) error {
+	if conv == nil {
+		return errors.New("pamtester: nil ConvFunc")
+	}
+	password, err := conv(PromptEchoOff, "Password: ")
+	if err != nil {
+		return fmt.Errorf("pam_authenticate: %w: %w", ErrConv, err)
+	}
+	return t.Authenticate(password)
+}
+
 // AcctMgmt is a no-op on Windows: LogonUserW already validates account
 // status (enabled, not expired, not locked) during Authenticate, so there
 // is no separate account-management step.
@@ -286,6 +301,29 @@ func (t *Transaction) ChangeAuthTok(oldPassword, newPassword string) error {
 		return fmt.Errorf("pam_chauthtok: %w", winError(uint32(ret)))
 	}
 	return nil
+}
+
+// ChangeAuthTokConv asks conv for the current password, the new password
+// and its confirmation (three PromptEchoOff prompts, as passwd(1) would) and
+// then behaves like ChangeAuthTok. A mismatched confirmation yields an error
+// matching ErrAuthTok; an error from conv is returned wrapped together with
+// ErrConv.
+func (t *Transaction) ChangeAuthTokConv(conv ConvFunc) error {
+	if conv == nil {
+		return errors.New("pamtester: nil ConvFunc")
+	}
+	var answers [3]string
+	for i, prompt := range []string{"Current password: ", "New password: ", "Retype new password: "} {
+		reply, err := conv(PromptEchoOff, prompt)
+		if err != nil {
+			return fmt.Errorf("pam_chauthtok: %w: %w", ErrConv, err)
+		}
+		answers[i] = reply
+	}
+	if answers[1] != answers[2] {
+		return fmt.Errorf("pam_chauthtok: %w (passwords do not match)", ErrAuthTok)
+	}
+	return t.ChangeAuthTok(answers[0], answers[1])
 }
 
 // Messages always returns nil on Windows: the Win32 APIs used here do not

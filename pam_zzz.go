@@ -28,6 +28,12 @@ func (t *Transaction) Authenticate(password string) error {
 	return errors.ErrUnsupported
 }
 
+// AuthenticateConv runs pam_authenticate with a custom conversation.
+// Unsupported with the nopamtester tag or on this platform.
+func (t *Transaction) AuthenticateConv(conv ConvFunc) error {
+	return errors.ErrUnsupported
+}
+
 // AcctMgmt checks account validity via pam_acct_mgmt. Unsupported with the
 // nopamtester tag or on this platform.
 func (t *Transaction) AcctMgmt() error {
@@ -37,6 +43,12 @@ func (t *Transaction) AcctMgmt() error {
 // ChangeAuthTok changes the user's password via pam_chauthtok. Unsupported
 // with the nopamtester tag or on this platform.
 func (t *Transaction) ChangeAuthTok(oldPassword, newPassword string) error {
+	return errors.ErrUnsupported
+}
+
+// ChangeAuthTokConv runs pam_chauthtok with a custom conversation.
+// Unsupported with the nopamtester tag or on this platform.
+func (t *Transaction) ChangeAuthTokConv(conv ConvFunc) error {
 	return errors.ErrUnsupported
 }
 
