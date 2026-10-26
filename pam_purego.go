@@ -197,7 +197,9 @@ func convHandler(numMsg int32, msgs uintptr, respOut uintptr, appdata uintptr) i
 		responses[i] = pamResponse{}
 	}
 
-	fail := func(code int32) int32 {
+	// release frees the responses and returns code; used on failure, and
+	// when there is nowhere to hand them back to (respOut is NULL).
+	release := func(code int32) int32 {
 		for i := range responses {
 			if responses[i].resp != 0 {
 				cFree(responses[i].resp)
@@ -211,17 +213,20 @@ func convHandler(numMsg int32, msgs uintptr, respOut uintptr, appdata uintptr) i
 		m := (*pamMessage)(cptr(msgPtrs[i]))
 		switch m.msgStyle {
 		case pamPromptEchoOff, pamPromptEchoOn:
+			if respOut == 0 {
+				return release(nativeConvErr)
+			}
 			// t.respond is only read here, on the same thread that holds
 			// t.mu inside the pam_* call — no extra locking needed.
 			if t.respond == nil {
-				return fail(nativeConvErr)
+				return release(nativeConvErr)
 			}
 			reply, ok := t.respond(m.msgStyle, goString(m.msg))
 			if !ok {
-				return fail(nativeConvErr)
+				return release(nativeConvErr)
 			}
 			if responses[i].resp = cStrdup(reply); responses[i].resp == 0 {
-				return fail(nativeBufErr)
+				return release(nativeBufErr)
 			}
 		case pamErrorMsg, pamTextInfo:
 			// No response expected; resp stays NULL. Keep the text (e.g.
@@ -232,6 +237,11 @@ func convHandler(numMsg int32, msgs uintptr, respOut uintptr, appdata uintptr) i
 		}
 	}
 
+	// Some modules (e.g. pam_matrix's verbose messages) pass a NULL resp
+	// pointer when sending only PAM_ERROR_MSG / PAM_TEXT_INFO.
+	if respOut == 0 {
+		return release(pamSuccess)
+	}
 	*(*uintptr)(cptr(respOut)) = respArray
 	return pamSuccess
 }
