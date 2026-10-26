@@ -41,6 +41,27 @@ func main() {
 }
 ```
 
+## PAM service
+
+`Start` uses the PAM service named by `Options.Service`, defaulting to
+`pamtester.PamService` (`passwd` on Linux, `checkpw` on macOS).
+
+On Linux, `/etc/pam.d/passwd` usually contains only a `password` stack, so
+`Authenticate`/`AcctMgmt` rely on Linux-PAM falling back to `/etc/pam.d/other`.
+That works on Debian/Ubuntu (where `other` includes `common-auth`), but fails on
+systems whose `other` is `pam_deny`. If you mainly verify passwords, pick a
+service with an `auth` section explicitly, or ship your own:
+
+```go
+t, err := pamtester.Start(user, &pamtester.Options{Service: "login"})
+```
+
+```
+# /etc/pam.d/myapp
+auth    include system-auth   # or: @include common-auth (Debian)
+account include system-auth   # or: @include common-account
+```
+
 ## CLI
 
 ```bash
