@@ -157,6 +157,8 @@ func (e Error) Error() string {
 		return "Bad item passed to pam_*_item()"
 	case ErrConvAgain:
 		return "Conversation is waiting for event"
+	case ErrIncomplete:
+		return "Application needs to call libpam again"
 	}
 	return fmt.Sprintf("PAM error %d", int32(e))
 }
