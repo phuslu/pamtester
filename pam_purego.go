@@ -15,8 +15,10 @@ package pamtester
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
+	"unicode"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -33,8 +35,9 @@ const (
 	pamItemAuthTok = 6 // PAM_AUTHTOK
 	pamItemRUser   = 8 // PAM_RUSER
 
-	// PAM_DISALLOW_NULL_AUTHTOK, same value in Linux-PAM and OpenPAM
-	pamDisallowNullAuthTok = 0x1
+	// flags, same values in Linux-PAM and OpenPAM
+	pamDisallowNullAuthTok  = 0x1  // PAM_DISALLOW_NULL_AUTHTOK
+	pamChangeExpiredAuthTok = 0x20 // PAM_CHANGE_EXPIRED_AUTHTOK
 )
 
 // ---------- C struct memory layouts ----------
@@ -262,6 +265,7 @@ type Transaction struct {
 	lastStatus int32
 	flags      int32 // flags for pam_authenticate / pam_acct_mgmt
 	allowNull  bool  // Options.AllowNullAuthTok
+	expired    bool  // last AcctMgmt reported ErrNewAuthTokReqd
 	closed     bool
 }
 
@@ -450,14 +454,25 @@ func (t *Transaction) AuthenticateConv(conv ConvFunc) error {
 func (t *Transaction) AcctMgmt() error {
 	return t.do("pam_acct_mgmt",
 		nil, // informational messages are handled; actual prompts are unexpected here
-		func() int32 { return pamAcctMgmt(t.pamh, t.flags) })
+		func() int32 {
+			ret := pamAcctMgmt(t.pamh, t.flags)
+			t.expired = ret != pamSuccess && pamError(ret) == ErrNewAuthTokReqd
+			return ret
+		})
 }
 
-// ChangeAuthTok changes the user's password via pam_chauthtok. Prompts
-// containing "new" (case-insensitive) are answered with newPassword, anything
-// else with oldPassword. Go programs never call setlocale(), so libpam
-// prompts stay untranslated C-locale English and this matching is reliable
-// even when LANG is set.
+// ChangeAuthTok changes the user's password via pam_chauthtok. Each prompt
+// is classified by passwordPromptIsNew: prompts for the current/old password
+// get oldPassword, prompts for the new password or its confirmation get
+// newPassword, and an unrecognised prompt gets oldPassword (or newPassword
+// when oldPassword is empty, as when root changes a password). Go programs
+// never call setlocale(), so libpam prompts stay untranslated C-locale
+// English and this matching is reliable even when LANG is set. For stacks
+// whose prompts do not fit, use ChangeAuthTokConv.
+//
+// If AcctMgmt on this transaction reported ErrNewAuthTokReqd, the change is
+// made with PAM_CHANGE_EXPIRED_AUTHTOK — as login(1) and sshd do — so
+// modules only update the expired token.
 //
 // Failures (wrong oldPassword, newPassword rejected by quality checks or
 // password policy, or no permission to update the password store) yield
@@ -482,12 +497,48 @@ func (t *Transaction) ChangeAuthTok(oldPassword, newPassword string) error {
 	}
 	return t.do("pam_chauthtok",
 		func(_ Style, prompt string) (string, error) {
-			if strings.Contains(strings.ToLower(prompt), "new") {
+			if passwordPromptIsNew(prompt, oldPassword == "") {
 				return newPassword, nil
 			}
 			return oldPassword, nil
 		},
-		func() int32 { return pamChauthtok(t.pamh, 0) })
+		t.chauthtok)
+}
+
+// chauthtok calls pam_chauthtok, adding PAM_CHANGE_EXPIRED_AUTHTOK when the
+// last AcctMgmt found the password expired. Runs under t.mu via do.
+func (t *Transaction) chauthtok() int32 {
+	var flags int32
+	if t.expired {
+		flags |= pamChangeExpiredAuthTok
+	}
+	ret := pamChauthtok(t.pamh, flags)
+	if ret == pamSuccess {
+		t.expired = false
+	}
+	return ret
+}
+
+// passwordPromptIsNew reports whether a pam_chauthtok prompt asks for the
+// new password (or its confirmation) rather than the current one. It looks
+// at whole words, so "(current) UNIX password:", "Old Password:", "New
+// password:", "Retype new password:", "Reenter new Password:" and "Enter it
+// again:" are all recognised. Prompts mentioning neither kind fall back to
+// fallbackNew.
+func passwordPromptIsNew(prompt string, fallbackNew bool) bool {
+	words := strings.FieldsFunc(strings.ToLower(prompt), func(r rune) bool {
+		return !unicode.IsLetter(r)
+	})
+	has := func(w string) bool { return slices.Contains(words, w) }
+	switch {
+	case has("current") || has("old") || has("existing"):
+		return false
+	case has("new") || has("again") || has("retype") || has("reenter") ||
+		has("repeat") || has("confirm") ||
+		has("re") && (has("enter") || has("type")):
+		return true
+	}
+	return fallbackNew
 }
 
 // ChangeAuthTokConv runs pam_chauthtok with conv answering every
@@ -498,7 +549,7 @@ func (t *Transaction) ChangeAuthTokConv(conv ConvFunc) error {
 		return errors.New("pamtester: nil ConvFunc")
 	}
 	return t.do("pam_chauthtok", conv,
-		func() int32 { return pamChauthtok(t.pamh, 0) })
+		t.chauthtok)
 }
 
 // Close ends the transaction with pam_end and releases all resources.
