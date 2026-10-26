@@ -38,6 +38,9 @@ const (
 	pamItemRHost   = 4 // PAM_RHOST
 	pamItemAuthTok = 6 // PAM_AUTHTOK
 	pamItemRUser   = 8 // PAM_RUSER
+
+	// PAM_DISALLOW_NULL_AUTHTOK, same value in Linux-PAM and OpenPAM
+	pamDisallowNullAuthTok = 0x1
 )
 
 // ---------- C struct memory layouts ----------
@@ -259,6 +262,8 @@ type Transaction struct {
 	respond    respondFunc
 	msgs       []string // PAM_ERROR_MSG / PAM_TEXT_INFO texts of the last operation
 	lastStatus int32
+	flags      int32 // flags for pam_authenticate / pam_acct_mgmt
+	allowNull  bool  // Options.AllowNullAuthTok
 	closed     bool
 }
 
@@ -303,7 +308,10 @@ func Start(user string, opts *Options) (*Transaction, error) {
 		return nil, errors.New("failed to allocate memory for pam_conv")
 	}
 
-	t := &Transaction{convMem: convMem}
+	t := &Transaction{convMem: convMem, flags: pamDisallowNullAuthTok}
+	if opts != nil && opts.AllowNullAuthTok {
+		t.flags, t.allowNull = 0, true
+	}
 	convMu.Lock()
 	t.id = convNextID
 	convNextID++
@@ -391,11 +399,17 @@ func (t *Transaction) Messages() []string {
 // calling the conversation. (OpenPAM, unlike Linux-PAM, allows applications
 // to set PAM_AUTHTOK.)
 //
+// An empty password is rejected with ErrAuth unless Options.AllowNullAuthTok
+// is set.
+//
 // Note that Authenticate only proves the password is right — call AcctMgmt
 // afterwards to check that the account itself is still usable.
 func (t *Transaction) Authenticate(password string) error {
 	if err := checkNUL(password); err != nil {
 		return err
+	}
+	if password == "" && !t.allowNull {
+		return errNullAuthTok
 	}
 	return t.do("pam_authenticate",
 		func(style int32, prompt string) (string, bool) { return password, true },
@@ -405,7 +419,7 @@ func (t *Transaction) Authenticate(password string) error {
 					return ret
 				}
 			}
-			return pamAuthenticate(t.pamh, 0)
+			return pamAuthenticate(t.pamh, t.flags)
 		})
 }
 
@@ -417,7 +431,7 @@ func (t *Transaction) Authenticate(password string) error {
 func (t *Transaction) AcctMgmt() error {
 	return t.do("pam_acct_mgmt",
 		nil, // informational messages are handled; actual prompts are unexpected here
-		func() int32 { return pamAcctMgmt(t.pamh, 0) })
+		func() int32 { return pamAcctMgmt(t.pamh, t.flags) })
 }
 
 // ChangeAuthTok changes the user's password via pam_chauthtok. Prompts

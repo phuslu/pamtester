@@ -42,3 +42,9 @@ func TestStartRejectsNUL(t *testing.T) {
 		t.Fatal(`Start("ro\x00ot") succeeded`)
 	}
 }
+
+func TestErrNullAuthTok(t *testing.T) {
+	if !errors.Is(errNullAuthTok, ErrAuth) {
+		t.Errorf("errNullAuthTok = %v, want it to match ErrAuth", errNullAuthTok)
+	}
+}

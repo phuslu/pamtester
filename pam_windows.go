@@ -131,10 +131,11 @@ func winError(code uint32) error {
 // Transaction represents one "PAM-like" transaction backed by Win32.
 // Obtain one with Start, and always Close it.
 type Transaction struct {
-	mu     sync.Mutex
-	user   string // account name (without domain prefix)
-	domain string // parsed from user (domain\user format); empty = unqualified
-	closed bool
+	mu        sync.Mutex
+	user      string // account name (without domain prefix)
+	domain    string // parsed from user (domain\user format); empty = unqualified
+	allowNull bool   // Options.AllowNullAuthTok
+	closed    bool
 }
 
 // Start opens a new transaction for user, given as "user", "DOMAIN\user",
@@ -172,7 +173,11 @@ func Start(user string, opts *Options) (*Transaction, error) {
 		user = user[idx+1:]
 	}
 
-	return &Transaction{user: user, domain: domain}, nil
+	t := &Transaction{user: user, domain: domain}
+	if opts != nil {
+		t.allowNull = opts.AllowNullAuthTok
+	}
+	return t, nil
 }
 
 // Authenticate verifies password by calling LogonUserW with
@@ -180,13 +185,17 @@ func Start(user string, opts *Options) (*Transaction, error) {
 // without creating a full interactive session. Returns nil if the password
 // is correct; a wrong password yields an error matching ErrAuth (use
 // errors.Is). Account-disabled and password-expired states are mapped to
-// ErrAcctExpired and ErrNewAuthTokReqd respectively.
+// ErrAcctExpired and ErrNewAuthTokReqd respectively. An empty password is
+// rejected with ErrAuth unless Options.AllowNullAuthTok is set.
 //
 // On Windows, LogonUserW already performs the checks that pam_acct_mgmt
 // would do on Linux; AcctMgmt is a no-op that returns nil.
 func (t *Transaction) Authenticate(password string) error {
 	if err := checkNUL(password); err != nil {
 		return err
+	}
+	if password == "" && !t.allowNull {
+		return errNullAuthTok
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()

@@ -73,6 +73,14 @@ type Options struct {
 
 	// RUser, if non-empty, is set as PAM_RUSER — the requesting user.
 	RUser string
+
+	// AllowNullAuthTok lets Authenticate accept an empty password for
+	// accounts that have none. By default an empty password is rejected
+	// with ErrAuth before PAM is consulted, and PAM_DISALLOW_NULL_AUTHTOK is
+	// passed to pam_authenticate and pam_acct_mgmt — many stacks (Debian's
+	// common-auth, macOS checkpw) carry "nullok", which would otherwise let
+	// anyone log in to a password-less account with "".
+	AllowNullAuthTok bool
 }
 
 // currentUser returns the name of the user running this process; Start uses
@@ -85,6 +93,10 @@ func currentUser() (string, error) {
 	}
 	return u.Username, nil
 }
+
+// errNullAuthTok is returned by Authenticate for an empty password unless
+// Options.AllowNullAuthTok is set.
+var errNullAuthTok = fmt.Errorf("pam_authenticate: %w (empty password)", ErrAuth)
 
 // Error is a PAM return code (from <security/_pam_types.h>) as a Go error.
 // Errors returned by this package wrap an Error, so callers can classify

@@ -31,6 +31,7 @@ const (
 
 	testUser     = "alice"
 	testPassword = "s3cret"
+	nullUser     = "nopass" // account with an empty password
 )
 
 var wrapperSkipReason string
@@ -85,7 +86,7 @@ func runWrapped(m *testing.M, lib string) int {
 	passdb := filepath.Join(dir, "passdb")
 
 	files := map[string]string{
-		"passdb": fmt.Sprintf("%s:%s:matrix\n", testUser, testPassword),
+		"passdb": fmt.Sprintf("%s:%s:matrix\n%s::matrix\n", testUser, testPassword, nullUser),
 		"services/matrix": fmt.Sprintf(
 			"auth required %[1]s passdb=%[2]s\naccount required %[1]s passdb=%[2]s\npassword required %[1]s passdb=%[2]s\n",
 			matrix, passdb),
@@ -155,6 +156,31 @@ func TestWrapperAuthenticateWrongPassword(t *testing.T) {
 	// a prefix of the right password followed by NUL must not pass
 	if err := tx.Authenticate(testPassword + "\x00junk"); err != errNUL {
 		t.Fatalf("Authenticate(password+NUL) = %v, want errNUL", err)
+	}
+}
+
+func TestWrapperEmptyPassword(t *testing.T) {
+	if wrapperSkipReason != "" {
+		t.Skip(wrapperSkipReason)
+	}
+	for _, user := range []string{testUser, nullUser} {
+		tx, err := Start(user, &Options{Service: "matrix"})
+		if err != nil {
+			t.Fatalf("Start(%s): %v", user, err)
+		}
+		defer tx.Close()
+		if err := tx.Authenticate(""); !errors.Is(err, ErrAuth) {
+			t.Errorf("Authenticate(%s, \"\") = %v, want ErrAuth", user, err)
+		}
+	}
+
+	tx, err := Start(nullUser, &Options{Service: "matrix", AllowNullAuthTok: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Close()
+	if err := tx.Authenticate(""); err != nil {
+		t.Errorf("Authenticate(%s, \"\") with AllowNullAuthTok = %v", nullUser, err)
 	}
 }
 

@@ -77,6 +77,13 @@ platforms (OpenPAM and Win32 codes are translated), so use `errors.Is`:
 | `ErrPermDenied` | access denied (e.g. pam_access, logon restrictions) |
 | `ErrAuthTok`, `ErrAuthTokRecovery` | password change rejected / wrong old password |
 
+## Empty passwords
+
+`Authenticate("")` fails with `ErrAuth` by default, and
+`PAM_DISALLOW_NULL_AUTHTOK` is passed to PAM: stacks with `nullok` (Debian's
+`common-auth`, macOS `checkpw`) would otherwise accept an empty password for
+accounts that have none. Set `Options.AllowNullAuthTok` to opt out.
+
 ## Privileges
 
 - **Verify own password:** no root needed (Linux delegates to the setuid
