@@ -14,10 +14,7 @@ package pamtester
 // (e.g. "login", "system-auth", or a dedicated file for the application).
 var PamService = "passwd"
 
-var (
-	libpamNames = []string{"libpam.so.0", "libpam.so"}
-	libcNames   = []string{"libc.so.6", "libc.so"}
-)
+var libpamNames = []string{"libpam.so.0", "libpam.so"}
 
 // Linux-PAM numbering is what Error uses, so native codes need no
 // translation.

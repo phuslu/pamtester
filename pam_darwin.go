@@ -6,10 +6,7 @@ package pamtester
 // used when Options.Service is empty.
 var PamService = "checkpw"
 
-var (
-	libpamNames = []string{"libpam.2.dylib", "libpam.dylib"}
-	libcNames   = []string{"libSystem.B.dylib", "libc.dylib"}
-)
+var libpamNames = []string{"libpam.2.dylib", "libpam.dylib"}
 
 // macOS ships OpenPAM, whose return codes (<security/pam_constants.h>) are
 // numbered differently from Linux-PAM (e.g. PAM_AUTH_ERR is 9 here but 7 on

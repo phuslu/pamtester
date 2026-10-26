@@ -5,7 +5,7 @@
 // names and the translation of native return codes:
 //
 //	PamService                   default service name
-//	libpamNames, libcNames       candidate libraries for dlopen
+//	libpamNames                  candidate libpam names for dlopen
 //	pamError(ret) Error          native return code -> portable Error
 //	nativeConvErr, nativeBufErr  native codes returned by the conversation
 //	presetAuthTok                whether Authenticate also sets PAM_AUTHTOK
@@ -123,11 +123,6 @@ func initLibs() {
 		initErr = fmt.Errorf("failed to load libpam (PAM may not be installed): %w", err)
 		return
 	}
-	libc, err := dlopenAny(libcNames...)
-	if err != nil {
-		initErr = fmt.Errorf("failed to load libc: %w", err)
-		return
-	}
 
 	purego.RegisterLibFunc(&pamStart, libpam, "pam_start")
 	purego.RegisterLibFunc(&pamAuthenticate, libpam, "pam_authenticate")
@@ -137,10 +132,16 @@ func initLibs() {
 	purego.RegisterLibFunc(&pamGetItem, libpam, "pam_get_item")
 	purego.RegisterLibFunc(&pamEnd, libpam, "pam_end")
 
-	purego.RegisterLibFunc(&cMalloc, libc, "malloc")
-	purego.RegisterLibFunc(&cFree, libc, "free")
-	purego.RegisterLibFunc(&cStrdup, libc, "strdup")
-	purego.RegisterLibFunc(&cStrlen, libc, "strlen")
+	// Resolve the libc functions through the global symbol scope rather than
+	// a separate dlopen of libc: memory handed to PAM is released with
+	// whatever free() libpam binds to, so malloc/strdup must come from the
+	// same allocator — which differs from libc's own when one such as
+	// jemalloc or tcmalloc is LD_PRELOADed. libc itself is always loaded
+	// (purego binaries link it), so these lookups cannot miss.
+	purego.RegisterLibFunc(&cMalloc, purego.RTLD_DEFAULT, "malloc")
+	purego.RegisterLibFunc(&cFree, purego.RTLD_DEFAULT, "free")
+	purego.RegisterLibFunc(&cStrdup, purego.RTLD_DEFAULT, "strdup")
+	purego.RegisterLibFunc(&cStrlen, purego.RTLD_DEFAULT, "strlen")
 
 	convCallback = purego.NewCallback(convHandler)
 }

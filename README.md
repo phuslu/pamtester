@@ -9,6 +9,10 @@ Verify and change users' login passwords through the OS authentication stack —
 | Windows | `LogonUserW` / `NetUserChangePassword` |
 | others | stub, `Start` returns `errors.ErrUnsupported` |
 
+On Linux the binary needs glibc: without cgo, purego links against
+`libc.so.6`, so on musl systems such as Alpine install `gcompat` (or build
+with `-tags nopamtester` if PAM is not needed there).
+
 Build with `-tags nopamtester` to compile the stub on every platform (e.g. to
 drop the purego dependency from a binary that never authenticates).
 
