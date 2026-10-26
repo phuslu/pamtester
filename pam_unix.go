@@ -33,12 +33,14 @@ const (
 	pamItemRUser = 8 // PAM_RUSER
 )
 
-// ---------- C struct memory layouts (amd64 / arm64) ----------
+// ---------- C struct memory layouts ----------
+//
+// No explicit padding: Go aligns uintptr fields to the platform word size
+// exactly like a C compiler does, so these match on 32- and 64-bit alike.
 
 // struct pam_message { int msg_style; const char *msg; };
 type pamMessage struct {
 	msgStyle int32
-	_        [4]byte // padding to 8-byte alignment, matching C compiler inserted padding
 	msg      uintptr
 }
 
@@ -46,7 +48,6 @@ type pamMessage struct {
 type pamResponse struct {
 	resp        uintptr
 	respRetcode int32
-	_           [4]byte
 }
 
 // struct pam_conv { int (*conv)(...); void *appdata_ptr; };
