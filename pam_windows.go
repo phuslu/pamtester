@@ -80,33 +80,61 @@ func utf16ToGoString(s []uint16) string {
 
 // ---------- Error mapping ----------
 
-// mapWinError maps common Win32 error codes to PAM error codes so that
-// callers can classify failures with errors.Is just like on Linux/macOS.
+// mapWinError maps common Win32 / LAN Manager error codes to PAM error codes
+// so that callers can classify failures with errors.Is just like on
+// Linux/macOS. Codes without a closer equivalent map to ErrSystem.
 func mapWinError(code uint32) Error {
 	switch code {
-	case 1326: // ERROR_LOGON_FAILURE
-		return ErrAuth
-	case 1330: // ERROR_PASSWORD_EXPIRED
-		return ErrNewAuthTokReqd
-	case 1331: // ERROR_ACCOUNT_DISABLED
-		return ErrAcctExpired
-	case 1793: // ERROR_ACCOUNT_EXPIRED
-		return ErrAcctExpired
-	case 1909: // ERROR_ACCOUNT_LOCKED_OUT
-		return ErrMaxTries
 	case 5: // ERROR_ACCESS_DENIED
 		return ErrPermDenied
 	case 86: // ERROR_INVALID_PASSWORD
 		return ErrAuthTokRecovery
+	case 1311: // ERROR_NO_LOGON_SERVERS
+		return ErrAuthinfoUnavail
+	case 1317: // ERROR_NO_SUCH_USER
+		return ErrUserUnknown
+	case 1326: // ERROR_LOGON_FAILURE
+		return ErrAuth
+	case 1327: // ERROR_ACCOUNT_RESTRICTION
+		return ErrPermDenied
+	case 1328: // ERROR_INVALID_LOGON_HOURS
+		return ErrPermDenied
+	case 1329: // ERROR_INVALID_WORKSTATION
+		return ErrPermDenied
+	case 1330: // ERROR_PASSWORD_EXPIRED
+		return ErrNewAuthTokReqd
+	case 1331: // ERROR_ACCOUNT_DISABLED
+		return ErrAcctExpired
+	case 1355: // ERROR_NO_SUCH_DOMAIN
+		return ErrAuthinfoUnavail
+	case 1385: // ERROR_LOGON_TYPE_NOT_GRANTED
+		return ErrPermDenied
+	case 1793: // ERROR_ACCOUNT_EXPIRED
+		return ErrAcctExpired
+	case 1907: // ERROR_PASSWORD_MUST_CHANGE
+		return ErrNewAuthTokReqd
+	case 1909: // ERROR_ACCOUNT_LOCKED_OUT
+		return ErrMaxTries
 	case 2221: // NERR_UserNotFound
 		return ErrUserUnknown
-	case 2226: // NERR_PasswordTooShort
+	case 2243: // NERR_PasswordCantChange
 		return ErrAuthTok
-	case 2245: // NERR_PasswordTooShort (duplicate/close)
+	case 2244: // NERR_PasswordHistConflict
+		return ErrAuthTok
+	case 2245: // NERR_PasswordTooShort
+		return ErrAuthTok
+	case 2246: // NERR_PasswordTooRecent
 		return ErrAuthTok
 	default:
 		return ErrSystem
 	}
+}
+
+// winError wraps both the mapped PAM Error and the original Win32 code, so
+// errors.Is works with the portable constants while the native code (and
+// its system message) is not lost.
+func winError(code uint32) error {
+	return fmt.Errorf("%w (%w)", mapWinError(code), syscall.Errno(code))
 }
 
 // ---------- Transaction ----------
@@ -210,7 +238,7 @@ func (t *Transaction) Authenticate(password string) error {
 		uintptr(unsafe.Pointer(&token)),
 	)
 	if ret == 0 {
-		return fmt.Errorf("pam_authenticate: %w", mapWinError(lastErrCode(callErr)))
+		return fmt.Errorf("pam_authenticate: %w", winError(lastErrCode(callErr)))
 	}
 	t.token = token
 	return nil
@@ -262,7 +290,7 @@ func (t *Transaction) ChangeAuthTok(oldPassword, newPassword string) error {
 		uintptr(unsafe.Pointer(&newW[0])),
 	)
 	if ret != 0 {
-		return fmt.Errorf("pam_chauthtok: %w", mapWinError(uint32(ret)))
+		return fmt.Errorf("pam_chauthtok: %w", winError(uint32(ret)))
 	}
 	return nil
 }
