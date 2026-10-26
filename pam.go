@@ -32,6 +32,34 @@
 //	pam_unix lacks permission to read /etc/shadow directly, it delegates to
 //	the setuid-root unix_chkpwd helper. unix_chkpwd refuses to check other
 //	users' passwords, so verifying arbitrary accounts requires root.
+//
+// Concurrency and blocking:
+//
+// Start, Authenticate, AcctMgmt, ChangeAuthTok and the *Conv variants are
+// synchronous foreign calls. Each blocks the calling goroutine and pins its
+// OS thread until PAM (or Win32) returns, and the Go
+// runtime starts extra threads to keep other goroutines running. A server
+// that authenticates many clients at once therefore uses one OS thread per
+// in-flight call; bound the concurrency (e.g. with a semaphore) instead of
+// spawning a goroutine per request without limit.
+//
+// Calls can take long. pam_unix and pam_faildelay delay a failed attempt
+// by about two seconds as brute-force protection, so a wrong password makes
+// Authenticate slow by design; modules backed by the network (sssd, LDAP,
+// Kerberos, RADIUS) wait for their own timeouts.
+//
+// PAM calls cannot be cancelled: there is no context.Context support,
+// because libpam offers no way to interrupt a module. A caller can stop
+// waiting by running the call in a goroutine and selecting on a timer, but
+// the call keeps running on its thread, and the Transaction stays locked —
+// Close and further methods block — until it returns.
+//
+// A Transaction may be used from several goroutines; its methods serialize
+// on an internal mutex. Separate Transactions run in parallel. Linux-PAM and
+// OpenPAM themselves are fine with that, but individual modules need not be
+// thread-safe (older or third-party modules may use non-reentrant libc
+// calls or shared state); if a stack includes such modules, serialize all
+// calls through one mutex in the application.
 package pamtester
 
 import (

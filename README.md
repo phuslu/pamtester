@@ -122,6 +122,40 @@ password(s) with fixed prompts and then call `Authenticate`/`ChangeAuthTok`.
 `common-auth`, macOS `checkpw`) would otherwise accept an empty password for
 accounts that have none. Set `Options.AllowNullAuthTok` to opt out.
 
+## Concurrency and blocking
+
+- Each call blocks its goroutine **and an OS thread** until PAM returns.
+  Bound concurrent authentications (e.g. a semaphore) rather than one
+  goroutine per request without limit.
+- A wrong password is slow on purpose: `pam_unix`/`pam_faildelay` add about a
+  2 s delay. Network-backed modules (sssd, LDAP, Kerberos) wait for their own
+  timeouts.
+- Calls **cannot be cancelled** (no `context.Context`; libpam has no way to
+  interrupt a module). You can stop waiting with a goroutine + timer, but
+  the call keeps running and the `Transaction` stays locked until it returns.
+- A `Transaction` serializes its own methods; separate transactions run in
+  parallel. Some PAM modules are not thread-safe — if your stack has one,
+  guard all calls with a single application-level mutex.
+
+```go
+var sem = make(chan struct{}, 8) // at most 8 PAM calls in flight
+
+func check(user, password string) error {
+    sem <- struct{}{}
+    defer func() { <-sem }()
+
+    t, err := pamtester.Start(user, &pamtester.Options{Service: "myapp"})
+    if err != nil {
+        return err
+    }
+    defer t.Close()
+    if err := t.Authenticate(password); err != nil {
+        return err
+    }
+    return t.AcctMgmt()
+}
+```
+
 ## Privileges
 
 - **Verify own password:** no root needed (Linux delegates to the setuid
