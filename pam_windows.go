@@ -267,6 +267,12 @@ func (t *Transaction) ChangeAuthTok(oldPassword, newPassword string) error {
 	return nil
 }
 
+// Messages always returns nil on Windows: the Win32 APIs used here do not
+// emit PAM-style informational messages.
+func (t *Transaction) Messages() []string {
+	return nil
+}
+
 // Close releases resources (the token handle from LogonUserW if any).
 // Calling Close more than once is harmless.
 func (t *Transaction) Close() error {

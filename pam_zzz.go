@@ -40,6 +40,11 @@ func (t *Transaction) ChangeAuthTok(oldPassword, newPassword string) error {
 	return errors.ErrUnsupported
 }
 
+// Messages always returns nil in the fallback implementation.
+func (t *Transaction) Messages() []string {
+	return nil
+}
+
 // Close ends the transaction. Nothing to do in the fallback implementation.
 func (t *Transaction) Close() error {
 	return nil

@@ -224,8 +224,12 @@ func convHandler(numMsg int32, msgs uintptr, respOut uintptr, appdata uintptr) i
 			if responses[i].resp = cStrdup(reply); responses[i].resp == 0 {
 				return fail(ErrBuf)
 			}
-		default:
-			// PAM_ERROR_MSG / PAM_TEXT_INFO messages need no response; resp stays NULL
+		case pamErrorMsg, pamTextInfo:
+			// No response expected; resp stays NULL. Keep the text (e.g.
+			// "BAD PASSWORD: ..." or "Password will expire in 3 days")
+			// so callers can see why an operation failed. Like t.respond,
+			// t.msgs is only touched while t.mu is held by do.
+			t.msgs = append(t.msgs, goString(m.msg))
 		}
 	}
 
@@ -244,6 +248,7 @@ type Transaction struct {
 	convMem    uintptr // C-heap allocated struct pam_conv
 	id         uintptr // key in convTxns
 	respond    respondFunc
+	msgs       []string // PAM_ERROR_MSG / PAM_TEXT_INFO texts of the last operation
 	lastStatus int32
 	closed     bool
 }
@@ -332,13 +337,28 @@ func (t *Transaction) do(name string, respond respondFunc, fn func() int32) erro
 	}
 	t.respond = respond
 	defer func() { t.respond = nil }()
+	t.msgs = nil
 
 	ret := fn()
 	t.lastStatus = ret
 	if ret != pamSuccess {
+		if len(t.msgs) > 0 {
+			return fmt.Errorf("%s: %w (%s)", name, Error(ret), strings.Join(t.msgs, "; "))
+		}
 		return fmt.Errorf("%s: %w", name, Error(ret))
 	}
 	return nil
+}
+
+// Messages returns the error and informational messages (PAM_ERROR_MSG /
+// PAM_TEXT_INFO) that PAM modules emitted during the most recent
+// Authenticate, AcctMgmt or ChangeAuthTok call — e.g. why a new password was
+// rejected, or that the password is about to expire. They are also appended
+// to the text of the error returned by a failed call.
+func (t *Transaction) Messages() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]string(nil), t.msgs...)
 }
 
 // Authenticate verifies password via pam_authenticate: regardless of what the
