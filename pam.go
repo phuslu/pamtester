@@ -1,14 +1,21 @@
-// Package pamtester verifies and changes users' login passwords by calling
-// the system's libpam directly via purego (no cgo required).
+// Package pamtester verifies and changes users' login passwords through the
+// operating system's native authentication stack, without cgo:
+//
+//   - Linux: Linux-PAM (libpam.so.0), called via purego.
+//   - macOS: OpenPAM (libpam.2.dylib), called via purego.
+//   - Windows: LogonUserW / NetUserChangePassword (no PAM involved).
+//
+// Other platforms, or builds with the nopamtester tag, get a stub whose Start
+// returns errors.ErrUnsupported.
 //
 // The core type is Transaction, which corresponds to one PAM transaction
 // (pam_start .. pam_end). Authenticate, AcctMgmt and ChangeAuthTok are its
-// methods. The top-level functions CheckUserPassword and ChangeUserPassword
-// are convenience wrappers around a single transaction.
+// methods; failures wrap an Error, so they can be classified with errors.Is
+// identically on every platform.
 //
 // How it works:
 //
-//	Linux commands like login, su, sudo, and passwd all authenticate passwords
+//	Commands like login, su, sudo, and passwd all authenticate passwords
 //	through PAM (Pluggable Authentication Modules). The flow is:
 //	  1. pam_start()          Opens a PAM transaction and registers a
 //	                           conversation callback function.
@@ -20,14 +27,10 @@
 //	  4. pam_end()            Closes the transaction.
 //
 //	The actual password comparison (reading /etc/shadow and hashing) is done by
-//	pam_unix.so. Non-root processes can typically verify their own password:
-//	when pam_unix lacks permission to read /etc/shadow directly, it delegates
-//	to the setuid-root unix_chkpwd helper, so this library does not require
-//	root privileges.
-//
-// Dependencies:
-//
-//	go get github.com/ebitengine/purego
+//	pam_unix.so. Non-root processes can verify their own password: when
+//	pam_unix lacks permission to read /etc/shadow directly, it delegates to
+//	the setuid-root unix_chkpwd helper. unix_chkpwd refuses to check other
+//	users' passwords, so verifying arbitrary accounts requires root.
 package pamtester
 
 import (

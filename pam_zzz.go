@@ -10,10 +10,10 @@ import (
 // used when Options.Service is empty.
 var PamService = "passwd"
 
-// Transaction represents one PAM transaction (pam_start .. pam_end). PAM is
-// only available on Linux; on unsupported platforms, or when built with the
-// nopamtester tag, every operation falls back to this stub and Start always
-// fails.
+// Transaction represents one PAM transaction (pam_start .. pam_end). Real
+// backends exist for Linux, macOS and Windows; on other platforms, or when
+// built with the nopamtester tag, every operation falls back to this stub and
+// Start always fails with errors.ErrUnsupported.
 type Transaction struct{}
 
 // Start opens a PAM transaction for user. Unsupported: with the nopamtester
