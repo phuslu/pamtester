@@ -452,7 +452,7 @@ func (t *Transaction) Close() error {
 	var err error
 	if t.pamh != 0 {
 		if ret := pamEnd(t.pamh, t.lastStatus); ret != pamSuccess {
-			err = fmt.Errorf("pam_end: %w", Error(ret))
+			err = fmt.Errorf("pam_end: %w", openpamError(ret))
 		}
 		t.pamh = 0
 	}
