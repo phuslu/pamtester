@@ -31,8 +31,26 @@
 package pamtester
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 )
+
+// errNUL is returned when a user name, password or other string argument
+// contains a NUL byte. C strings end at the first NUL, so passing such a
+// value through would silently truncate it — e.g. "secret\x00junk" would be
+// verified as "secret".
+var errNUL = errors.New("pamtester: argument contains NUL byte")
+
+// checkNUL returns errNUL if any of ss contains a NUL byte.
+func checkNUL(ss ...string) error {
+	for _, s := range ss {
+		if strings.IndexByte(s, 0) >= 0 {
+			return errNUL
+		}
+	}
+	return nil
+}
 
 // Options carries optional parameters for Start. The zero value is valid.
 type Options struct {

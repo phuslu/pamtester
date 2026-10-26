@@ -252,6 +252,14 @@ func Start(user string, opts *Options) (*Transaction, error) {
 	if opts != nil && opts.Service != "" {
 		service = opts.Service
 	}
+	if err := checkNUL(service, user); err != nil {
+		return nil, err
+	}
+	if opts != nil {
+		if err := checkNUL(opts.RHost, opts.TTY, opts.RUser); err != nil {
+			return nil, err
+		}
+	}
 
 	// The pam_conv struct is saved by PAM and used throughout the
 	// transaction lifetime (pam_authenticate etc. call back into it
@@ -333,6 +341,9 @@ func (t *Transaction) do(name string, respond respondFunc, fn func() int32) erro
 // Note that Authenticate only proves the password is right — call AcctMgmt
 // afterwards to check that the account itself is still usable.
 func (t *Transaction) Authenticate(password string) error {
+	if err := checkNUL(password); err != nil {
+		return err
+	}
 	return t.do("pam_authenticate",
 		func(style int32, prompt string) (string, bool) { return password, true },
 		func() int32 { return pamAuthenticate(t.pamh, 0) })
@@ -367,6 +378,9 @@ func (t *Transaction) AcctMgmt() error {
 // pam_unix ships a setuid unix_update helper (e.g. RHEL; Debian/Ubuntu do
 // not — there the passwd(1) command relies on its own setuid bit).
 func (t *Transaction) ChangeAuthTok(oldPassword, newPassword string) error {
+	if err := checkNUL(oldPassword, newPassword); err != nil {
+		return err
+	}
 	return t.do("pam_chauthtok",
 		func(style int32, prompt string) (string, bool) {
 			if strings.Contains(strings.ToLower(prompt), "new") {

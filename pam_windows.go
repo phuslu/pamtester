@@ -153,6 +153,10 @@ func Start(user string, opts *Options) (*Transaction, error) {
 		}
 	}
 
+	if err := checkNUL(user); err != nil {
+		return nil, err
+	}
+
 	// Split domain\user if present (typical Windows account format).
 	domain := ""
 	if idx := strings.IndexByte(user, '\\'); idx >= 0 {
@@ -173,6 +177,9 @@ func Start(user string, opts *Options) (*Transaction, error) {
 // On Windows, LogonUserW already performs the checks that pam_acct_mgmt
 // would do on Linux; AcctMgmt is a no-op that returns nil.
 func (t *Transaction) Authenticate(password string) error {
+	if err := checkNUL(password); err != nil {
+		return err
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
@@ -230,6 +237,9 @@ func (t *Transaction) AcctMgmt() error {
 // failures (too short, too simple, matches history) yield an error matching
 // ErrAuthTok.
 func (t *Transaction) ChangeAuthTok(oldPassword, newPassword string) error {
+	if err := checkNUL(oldPassword, newPassword); err != nil {
+		return err
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
