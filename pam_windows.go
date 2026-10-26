@@ -326,6 +326,21 @@ func (t *Transaction) ChangeAuthTokConv(conv ConvFunc) error {
 	return t.ChangeAuthTok(answers[0], answers[1])
 }
 
+// User returns the account name in the form Start resolved it to:
+// "DOMAIN\user" when a domain was given (or for the current user), else
+// the bare name. Windows does not rewrite it during Authenticate.
+func (t *Transaction) User() (string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return "", errors.New("pamtester: transaction already closed")
+	}
+	if t.domain != "" {
+		return t.domain + `\` + t.user, nil
+	}
+	return t.user, nil
+}
+
 // Messages always returns nil on Windows: the Win32 APIs used here do not
 // emit PAM-style informational messages.
 func (t *Transaction) Messages() []string {

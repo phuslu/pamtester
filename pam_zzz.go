@@ -52,6 +52,12 @@ func (t *Transaction) ChangeAuthTokConv(conv ConvFunc) error {
 	return errors.ErrUnsupported
 }
 
+// User returns the PAM_USER item. Unsupported with the nopamtester tag or
+// on this platform.
+func (t *Transaction) User() (string, error) {
+	return "", errors.ErrUnsupported
+}
+
 // Messages always returns nil in the fallback implementation.
 func (t *Transaction) Messages() []string {
 	return nil

@@ -83,6 +83,7 @@ func runWrapped(m *testing.M, lib string) int {
 	modDir := filepath.Join(filepath.Dir(lib), "pam_wrapper")
 	matrix := filepath.Join(modDir, "pam_matrix.so")
 	chatty := filepath.Join(modDir, "pam_chatty.so")
+	setItems := filepath.Join(modDir, "pam_set_items.so")
 	passdb := filepath.Join(dir, "passdb")
 
 	files := map[string]string{
@@ -94,6 +95,9 @@ func runWrapped(m *testing.M, lib string) int {
 			"auth required %[1]s passdb=%[2]s verbose\naccount required %[1]s passdb=%[2]s verbose\npassword required %[1]s passdb=%[2]s verbose\n",
 			matrix, passdb),
 		"services/chatty": fmt.Sprintf("auth required %s num_lines=2 info error\n", chatty),
+		// pam_set_items sets PAM_USER from the environment, standing in for
+		// a module that maps the login name to another account.
+		"services/rename": fmt.Sprintf("auth required %s\nauth required %s passdb=%s\n", setItems, matrix, passdb),
 		"services/echo": fmt.Sprintf(
 			"auth required %[1]s passdb=%[2]s echo\npassword required %[1]s passdb=%[2]s echo\n",
 			matrix, passdb),
@@ -116,6 +120,7 @@ func runWrapped(m *testing.M, lib string) int {
 		envWrapperLib+"="+lib,
 		"PAM_WRAPPER=1",
 		"PAM_WRAPPER_SERVICE_DIR="+filepath.Join(dir, "services"),
+		"PAM_USER="+testUser, // read by pam_set_items in the "rename" service
 	)
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
@@ -420,5 +425,36 @@ func TestWrapperChangeAuthTokConv(t *testing.T) {
 	})
 	if err := startMatrix(t, "matrix").Authenticate(newPassword); err != nil {
 		t.Errorf("Authenticate(new) after ChangeAuthTokConv = %v", err)
+	}
+}
+
+func TestWrapperUser(t *testing.T) {
+	tx := startMatrix(t, "matrix")
+	if u, err := tx.User(); err != nil || u != testUser {
+		t.Fatalf("User() = %q, %v; want %q", u, err, testUser)
+	}
+
+	// "Alice" is mapped to alice by pam_set_items before pam_matrix runs.
+	if wrapperSkipReason != "" {
+		t.Skip(wrapperSkipReason)
+	}
+	tx, err := Start("Alice", &Options{Service: "rename"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Close()
+	if u, _ := tx.User(); u != "Alice" {
+		t.Errorf("User() before Authenticate = %q, want %q", u, "Alice")
+	}
+	if err := tx.Authenticate(testPassword); err != nil {
+		t.Fatalf("Authenticate = %v", err)
+	}
+	if u, err := tx.User(); err != nil || u != testUser {
+		t.Errorf("User() after Authenticate = %q, %v; want %q", u, err, testUser)
+	}
+
+	tx.Close()
+	if _, err := tx.User(); err == nil {
+		t.Error("User() after Close succeeded")
 	}
 }

@@ -30,6 +30,7 @@ const (
 	pamSuccess = 0 // PAM_SUCCESS
 
 	// pam_set_item item types
+	pamItemUser    = 2 // PAM_USER
 	pamItemTTY     = 3 // PAM_TTY
 	pamItemRHost   = 4 // PAM_RHOST
 	pamItemAuthTok = 6 // PAM_AUTHTOK
@@ -74,6 +75,7 @@ var (
 	pamAcctMgmt     func(pamh uintptr, flags int32) int32
 	pamChauthtok    func(pamh uintptr, flags int32) int32
 	pamSetItem      func(pamh uintptr, itemType int32, item string) int32
+	pamGetItem      func(pamh uintptr, itemType int32, item *uintptr) int32
 	pamEnd          func(pamh uintptr, status int32) int32
 
 	cMalloc func(size uintptr) uintptr
@@ -132,6 +134,7 @@ func initLibs() {
 	purego.RegisterLibFunc(&pamAcctMgmt, libpam, "pam_acct_mgmt")
 	purego.RegisterLibFunc(&pamChauthtok, libpam, "pam_chauthtok")
 	purego.RegisterLibFunc(&pamSetItem, libpam, "pam_set_item")
+	purego.RegisterLibFunc(&pamGetItem, libpam, "pam_get_item")
 	purego.RegisterLibFunc(&pamEnd, libpam, "pam_end")
 
 	purego.RegisterLibFunc(&cMalloc, libc, "malloc")
@@ -380,6 +383,24 @@ func (t *Transaction) do(name string, respond ConvFunc, fn func() int32) error {
 		return err
 	}
 	return nil
+}
+
+// User returns the PAM_USER item: the user name as the PAM modules see it.
+// Modules may rewrite it — e.g. case folding, alias or Kerberos principal
+// mapping, or a username prompt — so after a successful Authenticate this
+// is the account that was actually checked, which may differ from the name
+// given to Start.
+func (t *Transaction) User() (string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return "", errors.New("pamtester: transaction already closed")
+	}
+	var p uintptr
+	if ret := pamGetItem(t.pamh, pamItemUser, &p); ret != pamSuccess {
+		return "", fmt.Errorf("pam_get_item: %w", pamError(ret))
+	}
+	return goString(p), nil
 }
 
 // Messages returns the error and informational messages (PAM_ERROR_MSG /
