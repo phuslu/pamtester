@@ -1,4 +1,4 @@
-//go:build darwin && !nopamtester
+//go:build (darwin || (freebsd && cgo)) && !nopamtester
 
 package pamtester
 
@@ -37,8 +37,9 @@ func TestOpenPAMErrorMapping(t *testing.T) {
 	}
 }
 
-// TestAuthenticateWrongPassword runs against the real checkpw service: a
-// bogus password for the current user must fail with ErrAuth.
+// TestAuthenticateWrongPassword runs against the real default service
+// (checkpw on macOS, system on FreeBSD): a bogus password for the current
+// user must fail with ErrAuth.
 func TestAuthenticateWrongPassword(t *testing.T) {
 	if os.Getenv("PAMTESTER_LIVE") == "" {
 		t.Skip("set PAMTESTER_LIVE=1 to run against the real account database (records one failed logon)")

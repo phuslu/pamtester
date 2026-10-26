@@ -32,6 +32,23 @@ jobs:
       - run: go test -v -count=1 ./...
       - run: go test -v -count=1 -tags nopamtester ./...
 
+  freebsd:
+    # FreeBSD needs cgo for purego, so the real backend is only exercised by
+    # building natively inside a VM.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          prepare: pkg install -y go
+          run: |
+            export GOTOOLCHAIN=auto PAMTESTER_LIVE=1
+            go version
+            go vet ./...
+            go test -v -count=1 ./...
+            go test -v -count=1 -tags nopamtester ./...
+
   cross-build:
     runs-on: ubuntu-latest
     steps:
@@ -49,9 +66,17 @@ jobs:
             linux/amd64 linux/arm64 linux/386 linux/arm linux/riscv64 linux/loong64 \
             darwin/amd64 darwin/arm64 \
             windows/amd64 windows/386 windows/arm64 \
-            freebsd/amd64; do
+            freebsd/amd64 netbsd/amd64; do
             echo "::group::$target"
             GOOS=${target%/*} GOARCH=${target#*/} go build ./...
             GOOS=${target%/*} GOARCH=${target#*/} go vet ./...
             echo "::endgroup::"
+          done
+      - name: typecheck the FreeBSD backend (cgo-only) without a C toolchain
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          for arch in amd64 arm64; do
+            GOOS=freebsd GOARCH=$arch go vet -tags cgo,osusergo,netgo \
+              -gcflags=github.com/ebitengine/purego/internal/fakecgo=-std ./
           done

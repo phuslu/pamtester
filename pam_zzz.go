@@ -1,4 +1,4 @@
-//go:build nopamtester || (!linux && !darwin && !windows)
+//go:build nopamtester || !(linux || darwin || windows || (freebsd && cgo))
 
 package pamtester
 
@@ -11,7 +11,7 @@ import (
 var PamService = "passwd"
 
 // Transaction represents one PAM transaction (pam_start .. pam_end). Real
-// backends exist for Linux, macOS and Windows; on other platforms, or when
+// backends exist for Linux, macOS, Windows and FreeBSD (with cgo); on other platforms, or when
 // built with the nopamtester tag, every operation falls back to this stub and
 // Start always fails with errors.ErrUnsupported.
 type Transaction struct{}

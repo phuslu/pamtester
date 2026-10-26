@@ -1,8 +1,9 @@
-//go:build (linux || darwin) && !nopamtester
+//go:build (linux || darwin || (freebsd && cgo)) && !nopamtester
 
 // Shared purego-based PAM backend for Linux-PAM (pam_linux.go) and OpenPAM
-// (pam_darwin.go). The platform files provide the default service, library
-// names and the translation of native return codes:
+// (pam_openpam.go, with pam_darwin.go / pam_freebsd.go). The platform files
+// provide the default service, library names and the translation of native
+// return codes:
 //
 //	PamService                   default service name
 //	libpamNames                  candidate libpam names for dlopen

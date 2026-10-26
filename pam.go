@@ -4,6 +4,7 @@
 //   - Linux: Linux-PAM (libpam.so.0), called via purego.
 //   - macOS: OpenPAM (libpam.2.dylib), called via purego.
 //   - Windows: LogonUserW / NetUserChangePassword (no PAM involved).
+//   - FreeBSD: OpenPAM (libpam.so.6), called via purego; cgo builds only.
 //
 // Other platforms, or builds with the nopamtester tag, get a stub whose Start
 // returns errors.ErrUnsupported.

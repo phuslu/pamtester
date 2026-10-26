@@ -7,11 +7,16 @@ Verify and change users' login passwords through the OS authentication stack —
 | Linux | Linux-PAM (`libpam.so.0`) via [purego](https://github.com/ebitengine/purego) |
 | macOS | OpenPAM (`libpam.2.dylib`) via purego |
 | Windows | `LogonUserW` / `NetUserChangePassword` |
+| FreeBSD | OpenPAM (`libpam.so.6`) via purego; **requires cgo** (see below) |
 | others | stub, `Start` returns `errors.ErrUnsupported` |
 
 On Linux the binary needs glibc: without cgo, purego links against
 `libc.so.6`, so on musl systems such as Alpine install `gcompat` (or build
 with `-tags nopamtester` if PAM is not needed there).
+
+On FreeBSD purego only builds without cgo given a special `-gcflags` flag, so
+the PAM backend is enabled only when cgo is on (the default for native
+builds). `CGO_ENABLED=0` builds, e.g. cross-compiles, get the stub.
 
 Build with `-tags nopamtester` to compile the stub on every platform (e.g. to
 drop the purego dependency from a binary that never authenticates).
@@ -128,7 +133,8 @@ accounts that have none. Set `Options.AllowNullAuthTok` to opt out.
 ## PAM service
 
 `Start` uses the PAM service named by `Options.Service`, defaulting to
-`pamtester.PamService` (`passwd` on Linux, `checkpw` on macOS).
+`pamtester.PamService` (`passwd` on Linux, `checkpw` on macOS, `system` on
+FreeBSD).
 
 On Linux, `/etc/pam.d/passwd` usually contains only a `password` stack, so
 `Authenticate`/`AcctMgmt` rely on Linux-PAM falling back to `/etc/pam.d/other`.
@@ -152,7 +158,7 @@ account include system-auth   # or: @include common-account
 go test ./...                      # unit tests; integration tests skip without pam_wrapper
 sudo apt install libpam-wrapper    # cwrap pam_wrapper + pam_matrix
 go test -v ./...                   # Linux: sandboxed libpam tests, no root or real accounts
-PAMTESTER_LIVE=1 go test ./...     # macOS/Windows: one failed logon against the current user
+PAMTESTER_LIVE=1 go test ./...     # macOS/FreeBSD/Windows: one failed logon against the current user
 ```
 
 `PAMTESTER_PAM_WRAPPER_LIB=/path/to/libpam_wrapper.so` points the tests at a

@@ -1,4 +1,4 @@
-//go:build (linux || darwin) && !nopamtester
+//go:build (linux || darwin || (freebsd && cgo)) && !nopamtester
 
 package pamtester
 
