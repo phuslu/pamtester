@@ -9,6 +9,7 @@
 //	pamError(ret) Error          native return code -> portable Error
 //	nativeConvErr, nativeBufErr  native codes returned by the conversation
 //	presetAuthTok                whether Authenticate also sets PAM_AUTHTOK
+//	pamChangeExpiredAuthTok      native PAM_CHANGE_EXPIRED_AUTHTOK flag
 
 package pamtester
 
@@ -36,9 +37,9 @@ const (
 	pamItemAuthTok = 6 // PAM_AUTHTOK
 	pamItemRUser   = 8 // PAM_RUSER
 
-	// flags, same values in Linux-PAM and OpenPAM
-	pamDisallowNullAuthTok  = 0x1  // PAM_DISALLOW_NULL_AUTHTOK
-	pamChangeExpiredAuthTok = 0x20 // PAM_CHANGE_EXPIRED_AUTHTOK
+	// PAM_DISALLOW_NULL_AUTHTOK, same value in Linux-PAM and OpenPAM;
+	// PAM_CHANGE_EXPIRED_AUTHTOK differs and is defined per platform.
+	pamDisallowNullAuthTok = 0x1
 )
 
 // ---------- C struct memory layouts ----------

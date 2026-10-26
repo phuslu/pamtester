@@ -25,6 +25,8 @@ const (
 	// Linux-PAM refuses PAM_AUTHTOK from applications (PAM_BAD_ITEM); the
 	// password is supplied through the conversation only.
 	presetAuthTok = false
+
+	pamChangeExpiredAuthTok = 0x20 // PAM_CHANGE_EXPIRED_AUTHTOK
 )
 
 func pamError(ret int32) Error {

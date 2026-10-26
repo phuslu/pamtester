@@ -20,6 +20,8 @@ const (
 	// pam_opendirectory with use_first_pass only reads PAM_AUTHTOK, which
 	// OpenPAM lets applications set; see Authenticate.
 	presetAuthTok = true
+
+	pamChangeExpiredAuthTok = 0x4 // PAM_CHANGE_EXPIRED_AUTHTOK (0x20 in Linux-PAM)
 )
 
 // openpamErrors maps native OpenPAM return codes to the portable,
@@ -54,12 +56,15 @@ var openpamErrors = [...]Error{
 	26: ErrAbort,               // PAM_ABORT
 	27: ErrTryAgain,            // PAM_TRY_AGAIN
 	28: ErrModuleUnknown,       // PAM_MODULE_UNKNOWN
+	31: ErrBadItem,             // PAM_BAD_ITEM (OpenPAM extension)
 }
 
 func pamError(ret int32) Error {
 	if int(ret) < len(openpamErrors) && openpamErrors[ret] != 0 {
 		return openpamErrors[ret]
 	}
-	// PAM_DOMAIN_UNKNOWN and anything newer have no portable equivalent
+	// PAM_DOMAIN_UNKNOWN, the other OpenPAM extensions (PAM_BAD_HANDLE,
+	// PAM_BAD_FEATURE, PAM_BAD_CONSTANT) and anything newer have no portable
+	// equivalent
 	return ErrSystem
 }

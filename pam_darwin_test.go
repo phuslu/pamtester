@@ -21,6 +21,8 @@ func TestOpenPAMErrorMapping(t *testing.T) {
 		{21, ErrAuthTokRecovery},
 		{28, ErrModuleUnknown},
 		{29, ErrSystem}, // PAM_DOMAIN_UNKNOWN has no portable equivalent
+		{31, ErrBadItem},
+		{33, ErrSystem}, // PAM_BAD_CONSTANT
 		{1000, ErrSystem},
 	} {
 		if got := pamError(c.native); got != c.want {
@@ -29,6 +31,9 @@ func TestOpenPAMErrorMapping(t *testing.T) {
 	}
 	if nativeConvErr != 6 || nativeBufErr != 5 {
 		t.Errorf("native conv/buf codes = %d/%d, want 6/5", nativeConvErr, nativeBufErr)
+	}
+	if pamChangeExpiredAuthTok != 0x4 {
+		t.Errorf("PAM_CHANGE_EXPIRED_AUTHTOK = %#x, want 0x4", pamChangeExpiredAuthTok)
 	}
 }
 
