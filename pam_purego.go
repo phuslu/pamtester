@@ -1,4 +1,14 @@
-//go:build linux && !nopamtester
+//go:build (linux || darwin) && !nopamtester
+
+// Shared purego-based PAM backend for Linux-PAM (pam_linux.go) and OpenPAM
+// (pam_darwin.go). The platform files provide the default service, library
+// names and the translation of native return codes:
+//
+//	PamService                   default service name
+//	libpamNames, libcNames       candidate libraries for dlopen
+//	pamError(ret) Error          native return code -> portable Error
+//	nativeConvErr, nativeBufErr  native codes returned by the conversation
+//	presetAuthTok                whether Authenticate also sets PAM_AUTHTOK
 
 package pamtester
 
@@ -12,19 +22,7 @@ import (
 	"github.com/ebitengine/purego"
 )
 
-// PamService is the default PAM service configuration file under /etc/pam.d/,
-// used when Options.Service is empty.
-//
-// On many distributions /etc/pam.d/passwd only defines a "password" stack.
-// Authenticate and AcctMgmt then work only because Linux-PAM falls back,
-// per module type, to /etc/pam.d/other — on Debian/Ubuntu that includes
-// common-auth/common-account, but distributions whose "other" stack is
-// pam_deny reject every authentication. Services that mainly verify
-// passwords should set Options.Service to a stack with an "auth" section
-// (e.g. "login", "system-auth", or a dedicated file for the application).
-var PamService = "passwd"
-
-// ---------- PAM constants (from <security/_pam_types.h>) ----------
+// ---------- PAM constants common to Linux-PAM and OpenPAM ----------
 
 const (
 	pamSuccess = 0 // PAM_SUCCESS
@@ -36,9 +34,10 @@ const (
 	pamTextInfo      = 4 // informational message, no response expected
 
 	// pam_set_item item types
-	pamItemTTY   = 3 // PAM_TTY
-	pamItemRHost = 4 // PAM_RHOST
-	pamItemRUser = 8 // PAM_RUSER
+	pamItemTTY     = 3 // PAM_TTY
+	pamItemRHost   = 4 // PAM_RHOST
+	pamItemAuthTok = 6 // PAM_AUTHTOK
+	pamItemRUser   = 8 // PAM_RUSER
 )
 
 // ---------- C struct memory layouts ----------
@@ -117,12 +116,12 @@ func initLibs() {
 		}
 	}()
 
-	libpam, err := dlopenAny("libpam.so.0", "libpam.so")
+	libpam, err := dlopenAny(libpamNames...)
 	if err != nil {
 		initErr = fmt.Errorf("failed to load libpam (PAM may not be installed): %w", err)
 		return
 	}
-	libc, err := dlopenAny("libc.so.6", "libc.so")
+	libc, err := dlopenAny(libcNames...)
 	if err != nil {
 		initErr = fmt.Errorf("failed to load libc: %w", err)
 		return
@@ -179,7 +178,7 @@ func convHandler(numMsg int32, msgs uintptr, respOut uintptr, appdata uintptr) i
 	t := convTxns[appdata]
 	convMu.Unlock()
 	if t == nil {
-		return int32(ErrConv)
+		return nativeConvErr
 	}
 	if numMsg <= 0 {
 		return pamSuccess
@@ -191,21 +190,21 @@ func convHandler(numMsg int32, msgs uintptr, respOut uintptr, appdata uintptr) i
 
 	respArray := cMalloc(uintptr(n) * unsafe.Sizeof(pamResponse{}))
 	if respArray == 0 {
-		return int32(ErrBuf)
+		return nativeBufErr
 	}
 	responses := unsafe.Slice((*pamResponse)(cptr(respArray)), n)
 	for i := range responses {
 		responses[i] = pamResponse{}
 	}
 
-	fail := func(code Error) int32 {
+	fail := func(code int32) int32 {
 		for i := range responses {
 			if responses[i].resp != 0 {
 				cFree(responses[i].resp)
 			}
 		}
 		cFree(respArray)
-		return int32(code)
+		return code
 	}
 
 	for i := 0; i < n; i++ {
@@ -215,14 +214,14 @@ func convHandler(numMsg int32, msgs uintptr, respOut uintptr, appdata uintptr) i
 			// t.respond is only read here, on the same thread that holds
 			// t.mu inside the pam_* call — no extra locking needed.
 			if t.respond == nil {
-				return fail(ErrConv)
+				return fail(nativeConvErr)
 			}
 			reply, ok := t.respond(m.msgStyle, goString(m.msg))
 			if !ok {
-				return fail(ErrConv)
+				return fail(nativeConvErr)
 			}
 			if responses[i].resp = cStrdup(reply); responses[i].resp == 0 {
-				return fail(ErrBuf)
+				return fail(nativeBufErr)
 			}
 		case pamErrorMsg, pamTextInfo:
 			// No response expected; resp stays NULL. Keep the text (e.g.
@@ -309,7 +308,7 @@ func Start(user string, opts *Options) (*Transaction, error) {
 		delete(convTxns, t.id)
 		convMu.Unlock()
 		cFree(convMem)
-		return nil, fmt.Errorf("pam_start: %w", Error(ret))
+		return nil, fmt.Errorf("pam_start: %w", pamError(ret))
 	}
 	t.pamh = pamh
 
@@ -328,7 +327,7 @@ func Start(user string, opts *Options) (*Transaction, error) {
 			}
 			if ret := pamSetItem(pamh, it.typ, it.val); ret != pamSuccess {
 				t.Close()
-				return nil, fmt.Errorf("pam_set_item: %w", Error(ret))
+				return nil, fmt.Errorf("pam_set_item: %w", pamError(ret))
 			}
 		}
 	}
@@ -352,9 +351,9 @@ func (t *Transaction) do(name string, respond respondFunc, fn func() int32) erro
 	t.lastStatus = ret
 	if ret != pamSuccess {
 		if len(t.msgs) > 0 {
-			return fmt.Errorf("%s: %w (%s)", name, Error(ret), strings.Join(t.msgs, "; "))
+			return fmt.Errorf("%s: %w (%s)", name, pamError(ret), strings.Join(t.msgs, "; "))
 		}
-		return fmt.Errorf("%s: %w", name, Error(ret))
+		return fmt.Errorf("%s: %w", name, pamError(ret))
 	}
 	return nil
 }
@@ -370,10 +369,17 @@ func (t *Transaction) Messages() []string {
 	return append([]string(nil), t.msgs...)
 }
 
-// Authenticate verifies password via pam_authenticate: regardless of what the
-// PAM module asks (typically "Password:"), it responds uniformly with the
-// given password. Returns nil if the password is correct; a wrong password
-// yields an error matching ErrAuth (use errors.Is).
+// Authenticate verifies password via pam_authenticate. Returns nil if the
+// password is correct; a wrong password yields an error matching ErrAuth
+// (use errors.Is).
+//
+// Regardless of what the PAM module asks (typically "Password:"), the
+// conversation responds uniformly with the given password. On macOS the
+// password is additionally pre-set as the PAM_AUTHTOK item: verification
+// stacks like the default "checkpw" service pass use_first_pass to
+// pam_opendirectory, which only reads that item and fails without ever
+// calling the conversation. (OpenPAM, unlike Linux-PAM, allows applications
+// to set PAM_AUTHTOK.)
 //
 // Note that Authenticate only proves the password is right — call AcctMgmt
 // afterwards to check that the account itself is still usable.
@@ -383,7 +389,14 @@ func (t *Transaction) Authenticate(password string) error {
 	}
 	return t.do("pam_authenticate",
 		func(style int32, prompt string) (string, bool) { return password, true },
-		func() int32 { return pamAuthenticate(t.pamh, 0) })
+		func() int32 {
+			if presetAuthTok {
+				if ret := pamSetItem(t.pamh, pamItemAuthTok, password); ret != pamSuccess {
+					return ret
+				}
+			}
+			return pamAuthenticate(t.pamh, 0)
+		})
 }
 
 // AcctMgmt runs pam_acct_mgmt: it checks that the account is valid — not
@@ -397,23 +410,29 @@ func (t *Transaction) AcctMgmt() error {
 		func() int32 { return pamAcctMgmt(t.pamh, 0) })
 }
 
-// ChangeAuthTok changes the user's password via pam_chauthtok. When run
-// without root privileges PAM first asks for the current password
-// ("(current) UNIX password:"), then for the new one twice; as root the old
-// password is usually not requested and oldPassword may be empty.
+// ChangeAuthTok changes the user's password via pam_chauthtok. Prompts
+// containing "new" (case-insensitive) are answered with newPassword, anything
+// else with oldPassword. Go programs never call setlocale(), so libpam
+// prompts stay untranslated C-locale English and this matching is reliable
+// even when LANG is set.
 //
-// Prompts containing "new" (case-insensitive) are answered with newPassword,
-// anything else with oldPassword. Go programs never call setlocale(), so
-// libpam prompts stay untranslated C-locale English and this matching is
-// reliable even when LANG is set.
+// Failures (wrong oldPassword, newPassword rejected by quality checks or
+// password policy, or no permission to update the password store) yield
+// errors matching ErrAuthTok or ErrAuthTokRecovery depending on the module.
 //
-// Failures (wrong oldPassword, newPassword rejected by quality checks, or no
-// permission to write /etc/shadow) yield errors matching ErrAuthTok or
-// ErrAuthTokRecovery depending on the module. Note that unlike password
-// verification, actually updating the password requires write access to
-// /etc/shadow: root always works, while non-root only works on systems whose
-// pam_unix ships a setuid unix_update helper (e.g. RHEL; Debian/Ubuntu do
-// not — there the passwd(1) command relies on its own setuid bit).
+// Linux: without root privileges pam_unix first asks for the current
+// password ("Current password:"), then for the new one twice; as root the
+// old password is usually not requested and oldPassword may be empty.
+// Actually updating the password requires write access to /etc/shadow: root
+// always works, while non-root only works on systems whose pam_unix ships a
+// setuid unix_update helper (e.g. RHEL; Debian/Ubuntu do not — there the
+// passwd(1) command relies on its own setuid bit).
+//
+// macOS: the default service "checkpw" carries no password stack, so use a
+// service that does, e.g. Options{Service: "passwd"} (whose stack is
+// `password required pam_opendirectory.so`). pam_opendirectory prompts
+// "Old Password:" then "New Password:". Updates go through OpenDirectory, so
+// non-root users can change their own password.
 func (t *Transaction) ChangeAuthTok(oldPassword, newPassword string) error {
 	if err := checkNUL(oldPassword, newPassword); err != nil {
 		return err
@@ -441,7 +460,7 @@ func (t *Transaction) Close() error {
 	var err error
 	if t.pamh != 0 {
 		if ret := pamEnd(t.pamh, t.lastStatus); ret != pamSuccess {
-			err = fmt.Errorf("pam_end: %w", Error(ret))
+			err = fmt.Errorf("pam_end: %w", pamError(ret))
 		}
 		t.pamh = 0
 	}
