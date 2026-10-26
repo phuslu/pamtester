@@ -1,0 +1,57 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+    env:
+      # Linux: run the pam_wrapper integration tests, fail if unavailable.
+      PAMTESTER_REQUIRE_PAM_WRAPPER: "1"
+      # macOS/Windows: run the tests that hit the real account database.
+      PAMTESTER_LIVE: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Install pam_wrapper
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libpam-wrapper
+      - run: go vet ./...
+      - run: go test -v -count=1 ./...
+      - run: go test -v -count=1 -tags nopamtester ./...
+
+  cross-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: build and vet
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          for target in \
+            linux/amd64 linux/arm64 linux/386 linux/arm linux/riscv64 linux/loong64 \
+            darwin/amd64 darwin/arm64 \
+            windows/amd64 windows/386 windows/arm64 \
+            freebsd/amd64; do
+            echo "::group::$target"
+            GOOS=${target%/*} GOARCH=${target#*/} go build ./...
+            GOOS=${target%/*} GOARCH=${target#*/} go vet ./...
+            echo "::endgroup::"
+          done

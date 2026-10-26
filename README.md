@@ -106,6 +106,18 @@ auth    include system-auth   # or: @include common-auth (Debian)
 account include system-auth   # or: @include common-account
 ```
 
+## Testing
+
+```bash
+go test ./...                      # unit tests; integration tests skip without pam_wrapper
+sudo apt install libpam-wrapper    # cwrap pam_wrapper + pam_matrix
+go test -v ./...                   # Linux: sandboxed libpam tests, no root or real accounts
+PAMTESTER_LIVE=1 go test ./...     # macOS/Windows: one failed logon against the current user
+```
+
+`PAMTESTER_PAM_WRAPPER_LIB=/path/to/libpam_wrapper.so` points the tests at a
+non-standard location.
+
 ## CLI
 
 ```bash
