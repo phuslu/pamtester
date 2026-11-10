@@ -12,6 +12,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -77,46 +78,73 @@ func run(opts commandOptions) error {
 	}
 
 	reader := bufio.NewReader(os.Stdin)
-	targetName := opts.username
-	if targetName == "" {
-		fmt.Fprint(os.Stderr, "login: ")
-		targetName, err = readLine(reader)
-		if err != nil {
-			return fmt.Errorf("read username: %w", err)
-		}
+	username := opts.username
+	for {
+		targetName := username
+		username = "" // A supplied username applies to the first attempt only.
 		if targetName == "" {
-			targetName = current.Username
+			fmt.Fprint(os.Stderr, "login: ")
+			targetName, err = readLine(reader)
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			if err != nil {
+				return fmt.Errorf("read username: %w", err)
+			}
+			if targetName == "" {
+				targetName = current.Username
+			}
 		}
-	}
 
-	target, err := user.Lookup(targetName)
-	if err != nil {
-		return fmt.Errorf("unknown user %q: %w", targetName, err)
-	}
-	if realUID != 0 && target.Uid != current.Uid {
-		return fmt.Errorf("non-root users may only log in as %s", current.Username)
-	}
+		target, err := user.Lookup(targetName)
+		if err != nil {
+			printLoginIncorrect()
+			continue
+		}
+		if realUID != 0 && target.Uid != current.Uid {
+			printLoginIncorrect()
+			continue
+		}
 
-	password, err := readPassword(reader)
-	if err != nil {
-		return fmt.Errorf("read password: %w", err)
-	}
+		password, err := readPassword(reader)
+		if err != nil {
+			return fmt.Errorf("read password: %w", err)
+		}
 
-	pamUser, err := authenticate(target.Username, current.Username, opts.rhost, password)
-	clear(password)
-	if err != nil {
-		return err
-	}
+		pamUser, err := authenticate(target.Username, current.Username, opts.rhost, password)
+		clear(password)
+		if err != nil {
+			if isLoginRejected(err) {
+				printLoginIncorrect()
+				continue
+			}
+			return err
+		}
 
-	target, err = user.Lookup(pamUser)
-	if err != nil {
-		return fmt.Errorf("look up PAM user %q: %w", pamUser, err)
-	}
-	if realUID != 0 && target.Uid != current.Uid {
-		return fmt.Errorf("non-root users may only log in as %s", current.Username)
-	}
+		target, err = user.Lookup(pamUser)
+		if err != nil {
+			return fmt.Errorf("look up PAM user %q: %w", pamUser, err)
+		}
+		if realUID != 0 && target.Uid != current.Uid {
+			printLoginIncorrect()
+			continue
+		}
 
-	return startLoginShell(target, opts.preserveEnv)
+		return startLoginShell(target, opts.preserveEnv)
+	}
+}
+
+func isLoginRejected(err error) bool {
+	return errors.Is(err, pamtester.ErrAuth) ||
+		errors.Is(err, pamtester.ErrUserUnknown) ||
+		errors.Is(err, pamtester.ErrMaxTries) ||
+		errors.Is(err, pamtester.ErrAcctExpired) ||
+		errors.Is(err, pamtester.ErrPermDenied) ||
+		errors.Is(err, pamtester.ErrNewAuthTokReqd)
+}
+
+func printLoginIncorrect() {
+	fmt.Fprintln(os.Stderr, "Login incorrect")
 }
 
 func authenticate(username, requestingUser, rhost string, password []byte) (string, error) {
