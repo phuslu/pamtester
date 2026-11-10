@@ -202,4 +202,8 @@ non-standard location.
 
 ```bash
 go run ./cmd/pamtester/
+
+# Authenticate through PAM's "login" service and start a login shell.
+# Non-root callers may only log in as their current account.
+go -C cmd/login run . [username]
 ```
