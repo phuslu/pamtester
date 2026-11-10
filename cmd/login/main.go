@@ -76,6 +76,13 @@ func run(opts commandOptions) error {
 	if err != nil {
 		return fmt.Errorf("look up current user: %w", err)
 	}
+	loginName := ""
+	if realUID != 0 {
+		// LOGIN_NAME lets the invoking login program display a name that
+		// differs from the current NSS account. It never changes the
+		// account used for PAM or for dropping privileges.
+		loginName = os.Getenv("LOGIN_NAME")
+	}
 
 	reader := bufio.NewReader(os.Stdin)
 	username := opts.username
@@ -96,14 +103,23 @@ func run(opts commandOptions) error {
 			}
 		}
 
-		target, err := user.Lookup(targetName)
-		if err != nil {
-			printLoginIncorrect()
-			continue
-		}
-		if realUID != 0 && target.Uid != current.Uid {
-			printLoginIncorrect()
-			continue
+		var target *user.User
+		if realUID != 0 {
+			expectedName := current.Username
+			if loginName != "" {
+				expectedName = loginName
+			}
+			if targetName != expectedName {
+				printLoginIncorrect()
+				continue
+			}
+			target = current
+		} else {
+			target, err = user.Lookup(targetName)
+			if err != nil {
+				printLoginIncorrect()
+				continue
+			}
 		}
 
 		password, err := readPassword(reader)
@@ -121,13 +137,20 @@ func run(opts commandOptions) error {
 			return err
 		}
 
-		target, err = user.Lookup(pamUser)
+		pamTarget, err := user.Lookup(pamUser)
 		if err != nil {
 			return fmt.Errorf("look up PAM user %q: %w", pamUser, err)
 		}
-		if realUID != 0 && target.Uid != current.Uid {
-			printLoginIncorrect()
-			continue
+		if realUID != 0 {
+			if pamTarget.Uid != current.Uid {
+				printLoginIncorrect()
+				continue
+			}
+			// LOGIN_NAME is display-only. Use the real current account for
+			// supplementary groups, credentials and the login shell.
+			target = current
+		} else {
+			target = pamTarget
 		}
 
 		return startLoginShell(target, opts.preserveEnv)

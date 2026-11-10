@@ -207,3 +207,10 @@ go run ./cmd/pamtester/
 # Non-root callers may only log in as their current account.
 go -C cmd/login run . [username]
 ```
+
+For a non-root caller, `LOGIN_NAME` can provide the name that must be entered
+at the login prompt while PAM still authenticates the real current account:
+
+```bash
+LOGIN_NAME=phus.lu go -C cmd/login run .
+```
