@@ -158,15 +158,15 @@ func run(opts commandOptions) error {
 		}
 
 		var target *user.User
+		loginNameMatches := true
 		if realUID != 0 {
 			expectedName := current.Username
 			if loginName != "" {
 				expectedName = loginName
 			}
-			if targetName != expectedName {
-				printLoginIncorrect()
-				continue
-			}
+			// Delay rejecting a mismatched name until after authentication so
+			// callers cannot use the response timing to enumerate login names.
+			loginNameMatches = targetName == expectedName
 			target = current
 		} else {
 			target, err = user.Lookup(targetName)
@@ -196,7 +196,7 @@ func run(opts commandOptions) error {
 			return fmt.Errorf("look up PAM user %q: %w", pamUser, err)
 		}
 		if realUID != 0 {
-			if pamTarget.Uid != current.Uid {
+			if pamTarget.Uid != current.Uid || !loginNameMatches {
 				printLoginIncorrect()
 				continue
 			}
