@@ -205,12 +205,16 @@ go run ./cmd/pamtester/
 
 # Authenticate through PAM's "login" service and start a login shell.
 # Non-root callers may only log in as their current account.
-go -C cmd/login run . [username]
+go -C cmd/login run . [-login-name name] [username]
 ```
 
-For a non-root caller, `LOGIN_NAME` can provide the name that must be entered
-at the login prompt while PAM still authenticates the real current account:
+For a non-root caller, `-login-name`/`--login-name` (or the `LOGIN_NAME`
+environment variable) can provide the name that must be entered at the login
+prompt while PAM still authenticates the real current account. The
+command-line option takes precedence over the environment variable:
 
 ```bash
+go -C cmd/login run . --login-name phus.lu
+# Equivalent:
 LOGIN_NAME=phus.lu go -C cmd/login run .
 ```

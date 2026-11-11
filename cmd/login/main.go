@@ -10,7 +10,6 @@ package main
 import (
 	"bufio"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -29,13 +28,16 @@ const defaultPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bi
 type commandOptions struct {
 	preserveEnv bool
 	rhost       string
+	loginName   string
 	username    string
 }
+
+var errHelp = errors.New("help requested")
 
 func main() {
 	opts, err := parseFlags(os.Args[1:])
 	if err != nil {
-		if errors.Is(err, flag.ErrHelp) {
+		if errors.Is(err, errHelp) {
 			return
 		}
 		fmt.Fprintln(os.Stderr, "login:", err)
@@ -49,25 +51,77 @@ func main() {
 
 func parseFlags(args []string) (commandOptions, error) {
 	var opts commandOptions
-	fs := flag.NewFlagSet("login", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	fs.BoolVar(&opts.preserveEnv, "p", false, "do not clear the environment")
-	fs.StringVar(&opts.rhost, "h", "", "remote `host` for PAM_RHOST")
-	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "usage: login [-p] [-h host] [username]")
-		fs.PrintDefaults()
-	}
-	if err := fs.Parse(args); err != nil {
-		return commandOptions{}, err
-	}
-	if fs.NArg() > 1 {
-		fs.Usage()
-		return commandOptions{}, errors.New("too many arguments")
-	}
-	if fs.NArg() == 1 {
-		opts.username = fs.Arg(0)
+	parseOptions := true
+	usernameSet := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if parseOptions && arg == "--" {
+			parseOptions = false
+			continue
+		}
+		if !parseOptions || arg == "" || arg[0] != '-' || arg == "-" {
+			if usernameSet {
+				printUsage()
+				return commandOptions{}, errors.New("too many arguments")
+			}
+			opts.username = arg
+			usernameSet = true
+			continue
+		}
+
+		name, value, hasValue := splitOption(arg)
+		switch name {
+		case "p":
+			if hasValue {
+				preserveEnv, err := strconv.ParseBool(value)
+				if err != nil {
+					return commandOptions{}, fmt.Errorf("invalid value %q for -p: %w", value, err)
+				}
+				opts.preserveEnv = preserveEnv
+			} else {
+				opts.preserveEnv = true
+			}
+		case "h", "login-name":
+			if !hasValue {
+				if i+1 >= len(args) {
+					return commandOptions{}, fmt.Errorf("option %s requires a value", arg)
+				}
+				i++
+				value = args[i]
+			}
+			if name == "h" {
+				opts.rhost = value
+			} else {
+				opts.loginName = value
+			}
+		case "help":
+			printUsage()
+			return commandOptions{}, errHelp
+		default:
+			printUsage()
+			return commandOptions{}, fmt.Errorf("unknown option %s", arg)
+		}
 	}
 	return opts, nil
+}
+
+func splitOption(arg string) (name, value string, hasValue bool) {
+	name = strings.TrimPrefix(arg, "-")
+	name = strings.TrimPrefix(name, "-")
+	if before, after, ok := strings.Cut(name, "="); ok {
+		return before, after, true
+	}
+	return name, "", false
+}
+
+func printUsage() {
+	fmt.Fprintln(os.Stderr, "usage: login [-p] [-h host] [-login-name name] [username]")
+	fmt.Fprintln(os.Stderr, "  -h host")
+	fmt.Fprintln(os.Stderr, "    \tremote host for PAM_RHOST")
+	fmt.Fprintln(os.Stderr, "  -login-name name")
+	fmt.Fprintln(os.Stderr, "    \tnon-root login name (defaults to LOGIN_NAME)")
+	fmt.Fprintln(os.Stderr, "  -p")
+	fmt.Fprintln(os.Stderr, "    \tdo not clear the environment")
 }
 
 func run(opts commandOptions) error {
@@ -78,10 +132,10 @@ func run(opts commandOptions) error {
 	}
 	loginName := ""
 	if realUID != 0 {
-		// LOGIN_NAME lets the invoking login program display a name that
-		// differs from the current NSS account. It never changes the
+		// The login name lets the invoking login program display a name
+		// that differs from the current NSS account. It never changes the
 		// account used for PAM or for dropping privileges.
-		loginName = os.Getenv("LOGIN_NAME")
+		loginName = resolveLoginName(opts)
 	}
 
 	reader := bufio.NewReader(os.Stdin)
@@ -155,6 +209,13 @@ func run(opts commandOptions) error {
 
 		return startLoginShell(target, opts.preserveEnv)
 	}
+}
+
+func resolveLoginName(opts commandOptions) string {
+	if opts.loginName != "" {
+		return opts.loginName
+	}
+	return os.Getenv("LOGIN_NAME")
 }
 
 func isLoginRejected(err error) bool {
